@@ -1,5 +1,6 @@
 package io.quarkus.qute;
 
+import io.smallrye.mutiny.Multi;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
 import org.reactivestreams.Publisher;
@@ -15,6 +16,16 @@ public interface TemplateInstance {
      * Attribute key - the timeout for {@link #render()} in milliseconds.
      */
     String TIMEOUT = "timeout";
+
+    /**
+     * Attribute key - all template variants found.
+     */
+    String VARIANTS = "variants";
+
+    /**
+     * Attribute key - a selected variant.
+     */
+    String SELECTED_VARIANT = "selectedVariant";
 
     /**
      * Set the the root data object. Invocation of this method removes any data set previously by
@@ -69,8 +80,19 @@ public interface TemplateInstance {
      * 
      * @return a publisher that can be used to consume chunks of the rendered template
      * @throws UnsupportedOperationException If no {@link PublisherFactory} service provider is found
+     * @deprecated Use {@link #createMulti()} instead
      */
-    Publisher<String> publisher();
+    @Deprecated
+    default Publisher<String> publisher() {
+        return createMulti();
+    }
+
+    /**
+     * Each subscription triggers rendering.
+     * 
+     * @return a Multi that can be used to consume chunks of the rendered template
+     */
+    Multi<String> createMulti();
 
     /**
      * Triggers rendering.

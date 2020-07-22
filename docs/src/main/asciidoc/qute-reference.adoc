@@ -80,7 +80,7 @@ NOTE: In Quarkus, the caching is done automatically.
 The dynamic parts of a template include:
 
 * *Comment* 
-** `{! This is a comment !}`,
+** Starts with `{!` and ends with `!}`:  `{! This is a comment !}`,
 ** Could be multi-line,
 ** May contain expressions and sections: `{! {#if true} !}`.
 * *Expression*
@@ -93,6 +93,10 @@ The dynamic parts of a template include:
 ** The name in the closing tag is optional: `{#if active}ACTIVE!{/}`,
 ** Can be empty: `{#myTag image=true /}`,
 ** May declare nested section blocks: `{#if item.valid} Valid. {#else} Invalid. {/if}` and decide which block to render.
+* *Unparsed Character Data*
+** Starts with `{[` and ends with `]}`: `{[ <script>if(true){alert('Qute is cute!')};</script> ]}`,
+** Could be multi-line,
+** Used to mark the content that should be rendered but not parsed.
 
 === Identifiers
 
@@ -119,6 +123,63 @@ A closing curly bracket (`}`) is ignored if not inside an expression/tag.
 <4> Ignored: expression starts with `"`.
 
 TIP: It is also possible to use escape sequences `\{` and `\}` to insert delimiters in the text. In fact, an escape sequence is usually only needed for the start delimiter, ie. `\\{foo}` will be rendered as `{foo}` (no evaluation will happen).
+
+=== Removing Standalone Lines From the Template
+
+By default, Qute parser removes standalone lines from the template output.
+A *standalone line* is a line that contains at least one section tag (e.g. `{#each}` and `{/each}`) or parameter declaration (e.g. `{@org.acme.Foo foo}`) but no expression and non-whitespace character.
+In other words, a line that contains no section tag or a parameter declaration is *not* a standalone line.
+Likewise, a line that contains an _expression_ or a _non-whitespace character_ is *not* a standalone line.
+
+.Template Example
+[source,html]
+----
+<html>
+  <body>
+     <ul>
+     {#for item in items} <1>
+       <li>{item.name} {#if item.active}{item.price}{/if}</li>  <2>
+                          <3>
+     {/for}               <4>
+     </ul>
+   <body>
+</html>
+----
+<1> This is a standalone line and will be removed.
+<2> Not a standalone line - contains an expression and non-whitespace characters 
+<3> Not a standalone line - contains no section tag/parameter declaration
+<4> This is a standalone line.
+
+.Default Output
+[source,html]
+----
+<html>
+  <body>
+     <ul>
+       <li>Foo 100</li>  
+                             
+     </ul>
+   <body>
+</html>
+----
+
+The default behavior can be disabled by setting the property `quarkus.qute.remove-standalone-lines` to `false`.
+In this case, all whitespace characters from a standalone line will be printed to the output.
+
+.Output with `quarkus.qute.remove-standalone-lines=false`
+[source,html]
+----
+<html>
+  <body>
+     <ul>
+     
+       <li>Foo 100</li>
+                                    
+     
+     </ul>
+   <body>
+</html>
+----
 
 ==== Expressions
 
@@ -184,7 +245,7 @@ A typical example is the for/each loop - during iteration the content of the sec
 [TIP]
 ====
 Data passed to the template instance are always accessible using the `data` namespace. 
-This could be useful to access data for which the key is overriden:  
+This could be useful to access data for which the key is overridden:  
 
 [source,html]
 ----
@@ -221,6 +282,8 @@ This could be useful to access data for which the key is overriden:
 |Shorthand for if-then-else statement. Unlike in <<if_section>> nested operators are not supported.
 |`{item.isActive ? item.name : 'Inactive item'}` outputs the value of `item.name` if `item.isActive` resolves to `true`.
 |===
+
+TIP: The condition in a ternary operator evaluates to `true` if the value is not considered `falsy` as described in the <<if_section>>.
 
 NOTE: In fact, the operators are implemented as "virtual methods" that consume one parameter and can be used with infix notation, i.e. `{person.name or 'John'}` is translated to `{person.name.or('John')}`.
 
@@ -374,8 +437,9 @@ The output will be:
 [[if_section]]
 ===== If Section
 
-A basic control flow section.
-The simplest possible version accepts a single parameter and renders the content if it's evaluated to `true` (or `Boolean.TRUE`).
+The `if` section represents a basic control flow section.
+The simplest possible version accepts a single parameter and renders the content if the condition is evaluated to `true`.
+A condition without an operator evaluates to `true` if the value is not considered `falsy`, i.e. if the value is not `null`, `false`, an empty collection, an empty map, an empty array, an empty string/char sequence or a number equal to zero.
 
 [source]
 ----
@@ -384,7 +448,7 @@ The simplest possible version accepts a single parameter and renders the content
 {/if}
 ----
 
-You can also use the following operators:
+You can also use the following operators in a condition:
 
 |===
 |Operator |Aliases |Precedence (higher wins)
@@ -456,7 +520,7 @@ Precedence rules can be overridden by parentheses.
 ----
 
 
-You can add any number of `else` blocks:
+You can also add any number of `else` blocks:
 
 [source]
 ----
@@ -486,29 +550,39 @@ This could be useful to simplify the template structure:
 <1> The `name` will be resolved against the `item.parent`.
 <2> The `description` will be also resolved against the `item.parent`.
 
-It's also possible to specify an alias for the context object:
-
-[source,html]
-----
-{#with item.parent as myParent} <1>
-  <h1>{myParent.name}</h1>
-{/with}
-----
-<1> `myParent` is the alias that can be used inside the tag.
-
 This section might also come in handy when we'd like to avoid multiple expensive invocations:
 
 [source,html]
 ----
-{#with item.callExpensiveLogicToGetTheValue(true) as it}
-  {#if it is "fun"} <1>
+{#with item.callExpensiveLogicToGetTheValue(1,'foo',bazinga)}
+  {#if this is "fun"} <1>
     <h1>Yay!</h1>
   {#else}
-    <h1>{it} is not fun at all!</h1>
+    <h1>{this} is not fun at all!</h1>
   {/if}
 {/with}
 ----
-<1> `it` is the result of `item.callExpensiveLogicToGetTheValue(1,'foo',bazinga)`. The method is only invoked once even though the result may be used in multiple expressions.
+<1> `this` is the result of `item.callExpensiveLogicToGetTheValue(1,'foo',bazinga)`. The method is only invoked once even though the result may be used in multiple expressions.
+
+===== Let/Set Section
+
+This section allows you to define named local variables:
+[source,html]
+----
+{#let myParent=order.item.parent}
+  <h1>{myParent.name}</h1>
+{/let}
+----
+
+The section tag is also registered under the `set` alias:
+
+[source,html]
+----
+{#set myParent=item.parent price=item.price}
+  <h1>{myParent.name}</h1>
+  <p>Price: {price}
+{/set}
+----
 
 
 [[include_helper]]
@@ -529,8 +603,8 @@ These sections can be used to include another template and possibly override som
 </body>
 </html>
 ----
-<1> `insert` sections are used to specify parts that could be overriden by a template that includes the given template.
-<2> An `insert` section may define the default content that is rendered if not overriden.
+<1> `insert` sections are used to specify parts that could be overridden by a template that includes the given template.
+<2> An `insert` section may define the default content that is rendered if not overridden.
 
 .Template "detail"
 [source,html]
@@ -545,7 +619,7 @@ These sections can be used to include another template and possibly override som
 {/include}
 ----
 <1> `include` section is used to specify the extended template.
-<2> Nested blocks are used to specify the parts that should be overriden.
+<2> Nested blocks are used to specify the parts that should be overridden.
 
 NOTE: Section blocks can also define an optional end tag - `{/title}`.
 
@@ -553,41 +627,46 @@ NOTE: Section blocks can also define an optional end tag - `{/title}`.
 ===== User-defined Tags
 
 User-defined tags can be used to include a template and optionally pass some parameters.
-Let's suppose we have a template called `item.html`:
+Let's suppose we have a template called `itemDetail.html`:
 
 [source]
 ----
 {#if showImage} <1>
   {it.image} <2>
+  {nested-content} <3>
 {/if}
 ----
 <1> `showImage` is a named parameter.
 <2> `it` is a special key that is replaced with the first unnamed param of the tag.
+<3> (optional) `nested-content` is a special key that will be replaced by the content of the tag.
 
-Now if we register this template under the name `item` and if we add a `UserTagSectionHelper` to the engine:
+Now if we register this template under the name `itemDetail.html` and if we add a `UserTagSectionHelper` to the engine:
 
 [source,java]
 ----
 Engine engine = Engine.builder()
-                   .addSectionHelper(new UserTagSectionHelper.Factory("item"))
+                   .addSectionHelper(new UserTagSectionHelper.Factory("itemDetail","itemDetail.html"))
                    .build();
 ----
 
-NOTE: In Quarkus, all files from the `src/main/resources/templates/tags` are registered and monitored automatically.
+NOTE: In Quarkus, all files from the `src/main/resources/templates/tags` are registered and monitored automatically!
 
 We can include the tag like this:
 
 [source,html]
 ----
 <ul>
-{#each items}
+{#for item in items}
   <li>
-  {#item this showImage=true /} <1>
+  {#itemDetail item showImage=true} <1>
+    = <b>{item.name}</b> <2>
+  {/itemDetail}
   </li>
-{/each}
+{/for}
 </ul>
 ----
-<1> `this` is resolved to an iteration element and can be referenced using the `it` key in the tag template.
+<1> `item` is resolved to an iteration element and can be referenced using the `it` key in the tag template.
+<2> Tag content injected using the `nested-content` key in the tag template.
 
 === Engine Configuration
 
@@ -611,7 +690,7 @@ If you want to use Qute in your Quarkus application add the following dependency
 </dependency>
 ----
 
-In Quarkus, a preconfigured engine instance is provided and available for injection - a bean with scope `@Singleton`, bean type `io.quarkus.qute.Engine` and qualifier `@Default` is registered automatically.
+In Quarkus, a preconfigured engine instance is provided and available for injection - a bean with scope `@ApplicationScoped`, bean type `io.quarkus.qute.Engine` and qualifier `@Default` is registered automatically.
 Moreover, all templates located in the `src/main/resources/templates` directory are validated and can be easily injected. 
 
 [source,java]
@@ -635,6 +714,29 @@ class MyBean {
 <1> If there is no `ResourcePath` qualifier provided, the field name is used to locate the template. In this particular case, the container will attempt to locate a template with path `src/main/resources/templates/items.html`.
 <2> The `ResourcePath` qualifier instructs the container to inject a template from a path relative from `src/main/resources/templates`. In this case, the full path is `src/main/resources/templates/detail/items2_v1.html`. 
 <3> Inject the configured `Engine` instance.
+
+=== Template Variants
+
+Sometimes it's useful to render a specific variant of the template based on the content negotiation.
+This can be done by setting a special attribute via `TemplateInstance.setAttribute()`:
+
+[source,java]
+----
+class MyService {
+
+    @Inject
+    Template items; <1>
+    
+    @Inject
+    ItemManager manager;
+
+    String renderItems() {
+       return items.data("items",manager.findItems()).setAttribute(TemplateInstance.SELECTED_VARIANT, new Variant(Locale.getDefault(),"text/html","UTF-8")).render();
+    }
+}
+----
+
+NOTE: When using `quarkus-resteasy-qute` the content negotiation is performed automatically. See <<resteasy_integration>>.
 
 === Injecting Beans Directly In Templates
 
@@ -872,6 +974,7 @@ class Item {
 ----
 <1> The generated value resolver knows how to invoke the `BigDecimal.setScale()` method.
 
+[[resteasy_integration]]
 === RESTEasy Integration
 
 If you want to use Qute in your JAX-RS application, you'll need to add the `quarkus-resteasy-qute` extension first.
@@ -918,10 +1021,9 @@ public class HelloResource {
 <2> `Template.data()` returns a new template instance that can be customized before the actual rendering is triggered. In this case, we put the name value under the key `name`. The data map is accessible during rendering. 
 <3> Note that we don't trigger the rendering - this is done automatically by a special `ContainerResponseFilter` implementation.
 
-==== Variant Templates
 
-Sometimes it could be useful to render a specific variant of the template based on the content negotiation.
-`VariantTemplate` is a perfect match for this use case:
+The content negotiation is performed automatically.
+The resulting output depends on the `Accept` header received from the client.
 
 [source,java]
 ----
@@ -929,27 +1031,118 @@ Sometimes it could be useful to render a specific variant of the template based 
 class DetailResource {
 
     @Inject
-    VariantTemplate item; <1>
+    Template item; <1>
 
     @GET
     @Produces({ MediaType.TEXT_HTML, MediaType.TEXT_PLAIN })
-    public Rendering item() {
-        return item.data(new Item("Alpha", 1000)); <2>
+    public TemplateInstance item() {
+        return item.data("myItem", new Item("Alpha", 1000)); <2>
     }
 }
 ----
 <1> Inject a variant template with base path derived from the injected field - `src/main/resources/templates/item`.
-<2> The resulting output depends on the `Accept` header received from the client. For `text/plain` the `src/main/resources/templates/item.txt` template is used. For `text/html` the `META-INF/resources/templates/item.html` template is used.
+<2> For `text/plain` the `src/main/resources/templates/item.txt` template is used. For `text/html` the `META-INF/resources/templates/item.html` template is used.
 
 
 === Development Mode
 
 In the development mode, all files located in `src/main/resources/templates` are watched for changes and modifications are immediately visible.
 
+=== Type-safe Message Bundles
+
+==== Basic Concepts
+
+The basic idea is that every message is potentially a very simple template.
+In order to prevent type errors a message is defined as an annotated method of a *message bundle interface*.
+Quarkus generates the *message bundle implementation* at build time.
+Subsequently, the bundles can be used at runtime:
+
+1. Directly in your code via `io.quarkus.qute.i18n.MessageBundles#get()`; e.g. `MessageBundles.get(AppMessages.class).hello_name("Lucie")`
+2. Injected in your beans via `@Inject`; e.g. `@Inject AppMessages`
+3. Referenced in the templates via the message bundle name; e.g. `{msg:hello_name('Lucie')}`
+
+.Message Bundle Interface Example
+[source,java]
+----
+import io.quarkus.qute.i18n.Message;
+import io.quarkus.qute.i18n.MessageBundle;
+
+@MessageBundle <1>
+public interface AppMessages {
+
+    @Message("Hello {name}!") <2>
+    String hello_name(String name); <3>
+}
+----
+<1> Denotes a message bundle interface. The bundle name is defaulted to `msg` and is used as a namespace in templates expressions, e.g. `{msg:hello_name}`.
+<2> Each method must be annotated with `@Message`. The value is a qute template.
+<3> The method parameters can be used in the template.
+
+==== Bundle Name and Message Keys
+
+Keys are used directly in templates.
+The bundle name is used as a namespace in template expressions. 
+The `@MessageBundle` can be used to define the default strategy used to generate message keys from method names. 
+However, the `@Message` can override this strategy and even define a custom key.
+By default, the annotated element's name is used as-is. 
+Other possibilities are:
+
+1. De-camel-cased and hyphenated; e.g. `helloName()` -> `hello-name`
+2. De-camel-cased and parts separated by underscores; e.g. `helloName()` -> `hello_name`. 
+
+==== Validation
+
+* All message bundle templates are validated:
+** All expressions without a namespace must map to a parameter; e.g. `Hello {foo}` -> the method must have a param of name `foo`
+** All expressions are validated against the types of the parameters; e.g. `Hello {foo.bar}` where the parameter `foo` is of type `org.acme.Foo` -> `org.acme.Foo` must have a property of name `bar`
++
+NOTE: A warning message is logged for each _unused_ parameter.
+* Expressions that reference a message bundle method, such as `{msg:hello(item.name)}`, are validated too.
+
+==== Localization
+
+The default locale of the Java Virtual Machine used to *build the application* is used for the `@MessageBundle` interface by default.
+However, the `io.quarkus.qute.i18n.MessageBundle#locale()` can be used to specify a custom locale.
+Additionaly, there are two ways to define a localized bundle:
+
+1. Create an interface that extends the default interface that is annotated with `@Localized`
+2. Create an UTF-8 encoded file located in `src/main/resources/messages`; e.g. `msg_de.properties`.
+
+TIP: A localized interface is the preferred solution mainly due to the possibility of easy refactoring.
+
+.Localized Interface Example
+[source,java]
+----
+import io.quarkus.qute.i18n.Localized;
+import io.quarkus.qute.i18n.Message;
+
+@Localized("de") <1>
+public interface GermanAppMessages {
+
+    @Override
+    @Message("Hallo {name}!") <2>
+    String hello_name(String name);
+}
+----
+<1> The value is the locale tag string (IETF).
+<2> The value is the localized template.
+
+Message bundle files must be encoded in UTF-8.
+The file name consists of the relevant bundle name (e.g. `msg`) and underscore followed by the locate tag (IETF).
+The file format is very simple: each line represents either a key/value pair with the equals sign used as a separator or a comment (line starts with `#`).
+Keys are mapped to method names from the corresponding message bundle interface.
+Values represent the templates normally defined by `io.quarkus.qute.i18n.Message#value()`.
+We use `.properties` suffix in our example because most IDEs and text editors support syntax highlighting of `.properties` files.
+But in fact, the suffix could be anything.
+
+.Localized File Example - `msg_de.properties`
+[source,properties]
+----
+hello_name=Hallo {name}! <1> <2>
+----
+<1> Each line in a localized file represents a message template. 
+<2> Keys and values are separated by the equals sign.
+
 === Configuration Reference
 
 include::{generated-dir}/config/quarkus-qute.adoc[leveloffset=+1, opts=optional]
-
-== Extension Points
-
-TODO

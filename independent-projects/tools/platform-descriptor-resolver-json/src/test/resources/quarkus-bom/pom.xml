@@ -156,11 +156,6 @@
             </dependency>
             <dependency>
                 <groupId>io.quarkus</groupId>
-                <artifactId>quarkus-infinispan-embedded</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>io.quarkus</groupId>
                 <artifactId>quarkus-jaeger</artifactId>
                 <version>${project.version}</version>
             </dependency>
@@ -466,7 +461,7 @@
             </dependency>
             <dependency>
                 <groupId>io.quarkus</groupId>
-                <artifactId>quarkus-vault-spi</artifactId>
+                <artifactId>quarkus-credentials</artifactId>
                 <version>${project.version}</version>
             </dependency>
 -->

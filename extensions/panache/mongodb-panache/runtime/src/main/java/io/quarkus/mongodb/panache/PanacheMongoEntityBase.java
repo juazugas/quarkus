@@ -207,11 +207,11 @@ public abstract class PanacheMongoEntityBase {
      *
      * @param query a {@link org.bson.Document} query
      * @return a new {@link PanacheQuery} instance for the given query
-     * @see #find(String, Parameters)
-     * @see #find(String, Sort, Map)
-     * @see #find(String, Sort, Parameters)
-     * @see #list(String, Sort, Parameters)
-     * @see #stream(String, Sort, Parameters)
+     * @see #find(Document, Document)
+     * @see #list(Document)
+     * @see #list(Document, Document)
+     * @see #stream(Document)
+     * @see #stream(Document, Document)
      */
     @GenerateBridge
     public static <T extends PanacheMongoEntityBase> PanacheQuery<T> find(Document query) {
@@ -224,11 +224,11 @@ public abstract class PanacheMongoEntityBase {
      * @param query a {@link org.bson.Document} query
      * @param sort the {@link org.bson.Document} sort
      * @return a new {@link PanacheQuery} instance for the given query
-     * @see #find(String, Parameters)
-     * @see #find(String, Sort, Map)
-     * @see #find(String, Sort, Parameters)
-     * @see #list(String, Sort, Parameters)
-     * @see #stream(String, Sort, Parameters)
+     * @see #find(Document)
+     * @see #list(Document)
+     * @see #list(Document, Document)
+     * @see #stream(Document)
+     * @see #stream(Document, Document)
      */
     @GenerateBridge
     public static <T extends PanacheMongoEntityBase> PanacheQuery<T> find(Document query, Document sort) {
@@ -378,12 +378,12 @@ public abstract class PanacheMongoEntityBase {
      * This method is a shortcut for <code>find(query).list()</code>.
      *
      * @param query a {@link org.bson.Document} query
-     * @return a new {@link PanacheQuery} instance for the given query
-     * @see #find(String, Parameters)
-     * @see #find(String, Sort, Map)
-     * @see #find(String, Sort, Parameters)
-     * @see #list(String, Sort, Parameters)
-     * @see #stream(String, Sort, Parameters)
+     * @return a {@link List} containing all results, without paging
+     * @see #find(Document)
+     * @see #find(Document, Document)
+     * @see #list(Document, Document)
+     * @see #stream(Document)
+     * @see #stream(Document, Document)
      */
     @GenerateBridge
     public static <T extends PanacheMongoEntityBase> List<T> list(Document query) {
@@ -396,12 +396,12 @@ public abstract class PanacheMongoEntityBase {
      *
      * @param query a {@link org.bson.Document} query
      * @param sort the {@link org.bson.Document} sort
-     * @return a new {@link PanacheQuery} instance for the given query
-     * @see #find(String, Parameters)
-     * @see #find(String, Sort, Map)
-     * @see #find(String, Sort, Parameters)
-     * @see #list(String, Sort, Parameters)
-     * @see #stream(String, Sort, Parameters)
+     * @return a {@link List} containing all results, without paging
+     * @see #find(Document)
+     * @see #find(Document, Document)
+     * @see #list(Document)
+     * @see #stream(Document)
+     * @see #stream(Document, Document)
      */
     @GenerateBridge
     public static <T extends PanacheMongoEntityBase> List<T> list(Document query, Document sort) {
@@ -553,12 +553,12 @@ public abstract class PanacheMongoEntityBase {
      * This method is a shortcut for <code>find(query).stream()</code>.
      *
      * @param query a {@link org.bson.Document} query
-     * @return a new {@link PanacheQuery} instance for the given query
-     * @see #find(String, Parameters)
-     * @see #find(String, Sort, Map)
-     * @see #find(String, Sort, Parameters)
-     * @see #list(String, Sort, Parameters)
-     * @see #stream(String, Sort, Parameters)
+     * @return a {@link Stream} containing all results, without paging
+     * @see #find(Document)
+     * @see #find(Document, Document)
+     * @see #list(Document)
+     * @see #list(Document, Document)
+     * @see #stream(Document, Document)
      */
     @GenerateBridge
     public static <T extends PanacheMongoEntityBase> Stream<T> stream(Document query) {
@@ -571,12 +571,12 @@ public abstract class PanacheMongoEntityBase {
      *
      * @param query a {@link org.bson.Document} query
      * @param sort the {@link org.bson.Document} sort
-     * @return a new {@link PanacheQuery} instance for the given query
-     * @see #find(String, Parameters)
-     * @see #find(String, Sort, Map)
-     * @see #find(String, Sort, Parameters)
-     * @see #list(String, Sort, Parameters)
-     * @see #stream(String, Sort, Parameters)
+     * @return a {@link Stream} containing all results, without paging
+     * @see #find(Document)
+     * @see #find(Document, Document)
+     * @see #list(Document)
+     * @see #list(Document, Document)
+     * @see #stream(Document, Document)
      */
     @GenerateBridge
     public static <T extends PanacheMongoEntityBase> Stream<T> stream(Document query, Document sort) {
@@ -698,6 +698,17 @@ public abstract class PanacheMongoEntityBase {
     }
 
     /**
+     * Delete an entity of this type by ID.
+     *
+     * @param id the ID of the entity to delete.
+     * @return false if the entity was not deleted (not found).
+     */
+    @GenerateBridge
+    public static boolean deleteById(Object id) {
+        throw MongoOperations.implementationInjectionMissing();
+    }
+
+    /**
      * Delete all entities of this type matching the given query, with optional indexed parameters.
      *
      * @param query a {@link io.quarkus.mongodb.panache query string}
@@ -783,7 +794,7 @@ public abstract class PanacheMongoEntityBase {
     /**
      * Insert all given entities.
      *
-     * @param entities the entities to update
+     * @param entities the entities to insert
      * @see #persist()
      * @see #persist(Stream)
      * @see #persist(Iterable)
@@ -862,6 +873,55 @@ public abstract class PanacheMongoEntityBase {
      */
     public static void persistOrUpdate(Object firstEntity, Object... entities) {
         MongoOperations.persistOrUpdate(firstEntity, entities);
+    }
+
+    /**
+     * Update all entities of this type by the given update document, with optional indexed parameters.
+     * The returned {@link PanacheUpdate} object will allow to restrict on which document the update should be applied.
+     *
+     * @param update the update document, if it didn't contain <code>$set</code> we add it.
+     *        It can also be expressed as a {@link io.quarkus.mongodb.panache query string}.
+     * @param params optional sequence of indexed parameters
+     * @return a new {@link PanacheUpdate} instance for the given update document
+     * @see #update(String, Map)
+     * @see #update(String, Parameters)
+     */
+    @GenerateBridge
+    public static PanacheUpdate update(String update, Object... params) {
+        throw MongoOperations.implementationInjectionMissing();
+    }
+
+    /**
+     * Update all entities of this type by the given update document, with named parameters.
+     * The returned {@link PanacheUpdate} object will allow to restrict on which document the update should be applied.
+     *
+     * @param update the update document, if it didn't contain <code>$set</code> we add it.
+     *        It can also be expressed as a {@link io.quarkus.mongodb.panache query string}.
+     * @param params {@link Map} of named parameters
+     * @return a new {@link PanacheUpdate} instance for the given update document
+     * @see #update(String, Object...)
+     * @see #update(String, Parameters)
+     *
+     */
+    @GenerateBridge
+    public static PanacheUpdate update(String update, Map<String, Object> params) {
+        throw MongoOperations.implementationInjectionMissing();
+    }
+
+    /**
+     * Update all entities of this type by the given update document, with named parameters.
+     * The returned {@link PanacheUpdate} object will allow to restrict on which document the update should be applied.
+     *
+     * @param update the update document, if it didn't contain <code>$set</code> we add it.
+     *        It can also be expressed as a {@link io.quarkus.mongodb.panache query string}.
+     * @param params {@link Parameters} of named parameters
+     * @return a new {@link PanacheUpdate} instance for the given update document
+     * @see #update(String, Object...)
+     * @see #update(String, Map)
+     */
+    @GenerateBridge
+    public static PanacheUpdate update(String update, Parameters params) {
+        throw MongoOperations.implementationInjectionMissing();
     }
 
     /**

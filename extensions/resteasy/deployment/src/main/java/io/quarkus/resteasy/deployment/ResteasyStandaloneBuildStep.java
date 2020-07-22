@@ -3,23 +3,24 @@ package io.quarkus.resteasy.deployment;
 import static io.quarkus.deployment.annotations.ExecutionTime.RUNTIME_INIT;
 import static io.quarkus.deployment.annotations.ExecutionTime.STATIC_INIT;
 
-import java.net.JarURLConnection;
-import java.net.URL;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.Enumeration;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.HashSet;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
-import java.util.jar.JarEntry;
-import java.util.stream.Stream;
 
 import io.quarkus.arc.deployment.BeanContainerBuildItem;
 import io.quarkus.builder.item.SimpleBuildItem;
 import io.quarkus.deployment.ApplicationArchive;
 import io.quarkus.deployment.Capabilities;
+import io.quarkus.deployment.Capability;
+import io.quarkus.deployment.Feature;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.Record;
@@ -30,6 +31,7 @@ import io.quarkus.deployment.builditem.ShutdownContextBuildItem;
 import io.quarkus.resteasy.common.deployment.ResteasyInjectionReadyBuildItem;
 import io.quarkus.resteasy.runtime.standalone.ResteasyStandaloneRecorder;
 import io.quarkus.resteasy.server.common.deployment.ResteasyDeploymentBuildItem;
+import io.quarkus.runtime.util.ClassPathUtils;
 import io.quarkus.vertx.core.deployment.CoreVertxBuildItem;
 import io.quarkus.vertx.http.deployment.DefaultRouteBuildItem;
 import io.quarkus.vertx.http.deployment.RequireVirtualHttpBuildItem;
@@ -68,7 +70,7 @@ public class ResteasyStandaloneBuildStep {
             ResteasyInjectionReadyBuildItem resteasyInjectionReady,
             HttpBuildTimeConfig httpConfig,
             BuildProducer<ResteasyStandaloneBuildItem> standalone) throws Exception {
-        if (capabilities.isCapabilityPresent(Capabilities.SERVLET)) {
+        if (capabilities.isPresent(Capability.SERVLET)) {
             return;
         }
 
@@ -114,85 +116,39 @@ public class ResteasyStandaloneBuildStep {
         for (ApplicationArchive i : applicationArchivesBuildItem.getAllApplicationArchives()) {
             Path resource = i.getChildPath(META_INF_RESOURCES);
             if (resource != null && Files.exists(resource)) {
-                try (Stream<Path> fileTreeElements = Files.walk(resource)) {
-                    fileTreeElements.forEach(new Consumer<Path>() {
-                        @Override
-                        public void accept(Path path) {
-                            // Skip META-INF/resources entry
-                            if (resource.equals(path)) {
-                                return;
-                            }
-                            Path rel = resource.relativize(path);
-                            if (!Files.isDirectory(path)) {
-                                String file = rel.toString();
-                                if (file.equals("index.html") || file.equals("index.htm")) {
-                                    knownPaths.add("/");
-                                }
-                                if (!file.startsWith("/")) {
-                                    file = "/" + file;
-                                }
-                                // Windows has a backslash
-                                file = file.replace('\\', '/');
-                                knownPaths.add(file);
-                            }
-                        }
-                    });
-                }
+                collectKnownPaths(resource, knownPaths);
             }
         }
-        Enumeration<URL> resources = getClass().getClassLoader().getResources(META_INF_RESOURCES);
-        while (resources.hasMoreElements()) {
-            URL url = resources.nextElement();
-            if (url.getProtocol().equals("jar")) {
-                JarURLConnection jar = (JarURLConnection) url.openConnection();
-                Enumeration<JarEntry> entries = jar.getJarFile().entries();
-                while (entries.hasMoreElements()) {
-                    JarEntry entry = entries.nextElement();
-                    if (entry.getName().startsWith(META_INF_RESOURCES_SLASH)) {
-                        String sub = entry.getName().substring(META_INF_RESOURCES_SLASH.length());
-                        if (!sub.isEmpty()) {
-                            if (sub.equals("index.html") || sub.equals("index.htm")) {
-                                knownPaths.add("/");
-                            }
-                            if (!sub.startsWith("/")) {
-                                sub = "/" + sub;
-                            }
-                            knownPaths.add(sub);
-                        }
-                    }
-                }
-            }
-            if (url.getProtocol().equals("file")) {
-                Path resource = Paths.get(url.toURI());
-                if (resource != null && Files.exists(resource)) {
-                    try (Stream<Path> fileTreeElements = Files.walk(resource)) {
-                        fileTreeElements.forEach(new Consumer<Path>() {
-                            @Override
-                            public void accept(Path path) {
-                                // Skip META-INF/resources entry
-                                if (resource.equals(path)) {
-                                    return;
-                                }
-                                Path rel = resource.relativize(path);
-                                if (!Files.isDirectory(path)) {
-                                    String file = rel.toString();
-                                    if (file.equals("index.html") || file.equals("index.htm")) {
-                                        knownPaths.add("/");
-                                    }
-                                    if (!file.startsWith("/")) {
-                                        file = "/" + file;
-                                    }
-                                    // Windows has a backslash
-                                    file = file.replace('\\', '/');
-                                    knownPaths.add(file);
-                                }
-                            }
-                        });
-                    }
-                }
-            }
-        }
+
+        ClassPathUtils.consumeAsPaths(META_INF_RESOURCES, resource -> {
+            collectKnownPaths(resource, knownPaths);
+        });
+
         return knownPaths;
+    }
+
+    private void collectKnownPaths(Path resource, Set<String> knownPaths) {
+        try {
+            Files.walkFileTree(resource, new SimpleFileVisitor<Path>() {
+                @Override
+                public FileVisitResult visitFile(Path p, BasicFileAttributes attrs)
+                        throws IOException {
+                    String file = resource.relativize(p).toString();
+                    if (file.equals("index.html") || file.equals("index.htm")) {
+                        knownPaths.add("/");
+                    }
+                    if (!file.startsWith("/")) {
+                        file = "/" + file;
+                    }
+                    // Windows has a backslash
+                    file = file.replace('\\', '/');
+                    knownPaths.add(file);
+                    return FileVisitResult.CONTINUE;
+                }
+            });
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     @BuildStep
@@ -212,7 +168,7 @@ public class ResteasyStandaloneBuildStep {
         if (standalone == null) {
             return;
         }
-        feature.produce(new FeatureBuildItem(FeatureBuildItem.RESTEASY));
+        feature.produce(new FeatureBuildItem(Feature.RESTEASY));
 
         boolean isDefaultOrNullDeploymentPath = standalone.deploymentRootPath == null
                 || standalone.deploymentRootPath.equals("/");

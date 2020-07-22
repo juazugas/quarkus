@@ -3,6 +3,7 @@ package io.quarkus.vertx.web.runtime;
 import java.lang.reflect.InvocationTargetException;
 import java.util.function.Function;
 
+import io.quarkus.runtime.ShutdownContext;
 import io.quarkus.runtime.annotations.Recorder;
 import io.quarkus.vertx.http.runtime.RouterProducer;
 import io.vertx.core.Handler;
@@ -22,7 +23,8 @@ public class VertxWebRecorder {
             }
             Class<? extends Handler<RoutingContext>> handlerClazz = (Class<? extends Handler<RoutingContext>>) cl
                     .loadClass(handlerClassName);
-            return handlerClazz.getDeclaredConstructor().newInstance();
+            RouteHandler handler = (RouteHandler) handlerClazz.getDeclaredConstructor().newInstance();
+            return handler;
         } catch (InstantiationException | IllegalAccessException | ClassNotFoundException | NoSuchMethodException
                 | InvocationTargetException e) {
             throw new IllegalStateException("Unable to create route handler: " + handlerClassName, e);
@@ -66,6 +68,15 @@ public class VertxWebRecorder {
                 return route;
             }
         };
+    }
+
+    public void clearCacheOnShutdown(ShutdownContext shutdown) {
+        shutdown.addShutdownTask(new Runnable() {
+            @Override
+            public void run() {
+                RouteHandlers.clear();
+            }
+        });
     }
 
 }

@@ -67,7 +67,6 @@ import io.quarkus.deployment.builditem.BootstrapConfigSetupCompleteBuildItem;
 import io.quarkus.deployment.builditem.BytecodeRecorderObjectLoaderBuildItem;
 import io.quarkus.deployment.builditem.CapabilityBuildItem;
 import io.quarkus.deployment.builditem.ConfigurationBuildItem;
-import io.quarkus.deployment.builditem.DeploymentClassLoaderBuildItem;
 import io.quarkus.deployment.builditem.MainBytecodeRecorderBuildItem;
 import io.quarkus.deployment.builditem.RunTimeConfigurationProxyBuildItem;
 import io.quarkus.deployment.builditem.RuntimeConfigSetupCompleteBuildItem;
@@ -497,7 +496,6 @@ public final class ExtensionLoader {
             final BuildStep buildStep = method.getAnnotation(BuildStep.class);
             final String[] archiveMarkers = buildStep.applicationArchiveMarkers();
             final String[] capabilities = buildStep.providesCapabilities();
-            final boolean loadsAppClasses = buildStep.loadsApplicationClasses();
             final Class<? extends BooleanSupplier>[] onlyIf = buildStep.onlyIf();
             final Class<? extends BooleanSupplier>[] onlyIfNot = buildStep.onlyIfNot();
             final Parameter[] methodParameters = method.getParameters();
@@ -868,7 +866,7 @@ public final class ExtensionLoader {
 
             final Consume[] consumes = method.getAnnotationsByType(Consume.class);
             if (consumes.length > 0) {
-                stepConfig = stepConfig.andThen(bsb -> {
+                methodStepConfig = methodStepConfig.andThen(bsb -> {
                     for (Consume consume : consumes) {
                         bsb.afterProduce(consume.value());
                     }
@@ -876,7 +874,7 @@ public final class ExtensionLoader {
             }
             final Produce[] produces = method.getAnnotationsByType(Produce.class);
             if (produces.length > 0) {
-                stepConfig = stepConfig.andThen(bsb -> {
+                methodStepConfig = methodStepConfig.andThen(bsb -> {
                     for (Produce produce : produces) {
                         bsb.beforeConsume(produce.value());
                     }
@@ -884,7 +882,7 @@ public final class ExtensionLoader {
             }
             final ProduceWeak[] produceWeaks = method.getAnnotationsByType(ProduceWeak.class);
             if (produceWeaks.length > 0) {
-                stepConfig = stepConfig.andThen(bsb -> {
+                methodStepConfig = methodStepConfig.andThen(bsb -> {
                     for (ProduceWeak produceWeak : produceWeaks) {
                         bsb.beforeConsume(produceWeak.value(), ProduceFlag.WEAK);
                     }
@@ -923,15 +921,11 @@ public final class ExtensionLoader {
                                 Object[] methodArgs = new Object[methodParamFns.size()];
                                 BytecodeRecorderImpl bri = isRecorder
                                         ? new BytecodeRecorderImpl(recordAnnotation.value() == ExecutionTime.STATIC_INIT,
-                                                clazz.getSimpleName(), method.getName())
+                                                clazz.getSimpleName(), method.getName(),
+                                                Integer.toString(method.toString().hashCode()))
                                         : null;
                                 for (int i = 0; i < methodArgs.length; i++) {
                                     methodArgs[i] = methodParamFns.get(i).apply(bc, bri);
-                                }
-                                ClassLoader old = Thread.currentThread().getContextClassLoader();
-                                if (loadsAppClasses) {
-                                    Thread.currentThread().setContextClassLoader(
-                                            bc.consume(DeploymentClassLoaderBuildItem.class).getClassLoader());
                                 }
                                 Object result;
                                 try {
@@ -946,10 +940,6 @@ public final class ExtensionLoader {
                                     } catch (Throwable t) {
                                         throw new IllegalStateException(t);
                                     }
-                                } finally {
-                                    //we do this every time, it also provides a measure of safety if the build step
-                                    //does something funny to the TCCL
-                                    Thread.currentThread().setContextClassLoader(old);
                                 }
                                 resultConsumer.accept(bc, result);
                                 if (isRecorder) {
@@ -967,9 +957,6 @@ public final class ExtensionLoader {
                                 return name;
                             }
                         });
-                        if (loadsAppClasses) {
-                            bsb.consumes(DeploymentClassLoaderBuildItem.class);
-                        }
                         finalStepConfig.accept(bsb);
                     });
         }

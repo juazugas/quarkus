@@ -1,6 +1,7 @@
 package io.quarkus.qute;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import io.quarkus.qute.Results.Result;
 import io.quarkus.qute.TemplateNode.Origin;
@@ -93,6 +94,8 @@ public class SimpleTest {
         Template template = engine
                 .parse("{name ? 'Name true' : 'Name false'}. {surname ? 'Surname true' : foo}.");
         assertEquals("Name true. baz.", template.data("name", true).data("foo", "baz").render());
+
+        assertEquals("1", engine.parse("{name ? 1 : 2}").data("name", "foo").render());
     }
 
     @Test
@@ -159,10 +162,6 @@ public class SimpleTest {
                             }
                         }).addResultMapper(new ResultMapper() {
 
-                            public int getPriority() {
-                                return 1;
-                            }
-
                             public boolean appliesTo(Origin origin, Object val) {
                                 return val.equals(Result.NOT_FOUND);
                             }
@@ -172,10 +171,6 @@ public class SimpleTest {
                                 return "fooo";
                             }
                         }).addResultMapper(new ResultMapper() {
-
-                            public int getPriority() {
-                                return 1;
-                            }
 
                             public boolean appliesTo(Origin origin, Object val) {
                                 return val instanceof Collection;
@@ -191,4 +186,26 @@ public class SimpleTest {
                         .render(Collections.emptyList()));
     }
 
+    @Test
+    public void testNotFoundThrowException() {
+        try {
+            Engine.builder().addDefaults()
+                    .addResultMapper(new ResultMapper() {
+
+                        public boolean appliesTo(Origin origin, Object val) {
+                            return val.equals(Result.NOT_FOUND);
+                        }
+
+                        @Override
+                        public String map(Object result, Expression expression) {
+                            throw new IllegalStateException("Not found: " + expression.toOriginalString());
+                        }
+                    }).build()
+                    .parse("{foo}")
+                    .render();
+            fail();
+        } catch (IllegalStateException expected) {
+            assertEquals("Not found: foo", expected.getMessage());
+        }
+    }
 }

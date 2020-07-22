@@ -5,6 +5,7 @@ import static org.objectweb.asm.Opcodes.ACC_BRIDGE;
 import static org.objectweb.asm.Opcodes.ACC_FINAL;
 import static org.objectweb.asm.Opcodes.ACC_PRIVATE;
 import static org.objectweb.asm.Opcodes.ACC_PUBLIC;
+import static org.objectweb.asm.Opcodes.ACC_VOLATILE;
 
 import io.quarkus.arc.InjectableBean;
 import io.quarkus.arc.InjectableInterceptor;
@@ -49,6 +50,7 @@ import java.util.function.Supplier;
 import javax.enterprise.context.spi.Contextual;
 import javax.enterprise.context.spi.CreationalContext;
 import javax.enterprise.inject.IllegalProductException;
+import javax.enterprise.inject.TransientReference;
 import javax.enterprise.inject.literal.InjectLiteral;
 import javax.enterprise.inject.spi.InterceptionType;
 import javax.interceptor.InvocationContext;
@@ -83,13 +85,23 @@ public class BeanGenerator extends AbstractGenerator {
     protected final AnnotationLiteralProcessor annotationLiterals;
     protected final Predicate<DotName> applicationClassPredicate;
     protected final PrivateMembersCollector privateMembers;
+    protected final ReflectionRegistration reflectionRegistration;
+    protected final Set<String> existingClasses;
+    protected final Map<BeanInfo, String> beanToGeneratedName;
+    protected final Predicate<DotName> injectionPointAnnotationsPredicate;
 
     public BeanGenerator(AnnotationLiteralProcessor annotationLiterals, Predicate<DotName> applicationClassPredicate,
-            PrivateMembersCollector privateMembers, boolean generateSources) {
+            PrivateMembersCollector privateMembers, boolean generateSources, ReflectionRegistration reflectionRegistration,
+            Set<String> existingClasses,
+            Map<BeanInfo, String> beanToGeneratedName, Predicate<DotName> injectionPointAnnotationsPredicate) {
         super(generateSources);
         this.annotationLiterals = annotationLiterals;
         this.applicationClassPredicate = applicationClassPredicate;
         this.privateMembers = privateMembers;
+        this.reflectionRegistration = reflectionRegistration;
+        this.existingClasses = existingClasses;
+        this.beanToGeneratedName = beanToGeneratedName;
+        this.injectionPointAnnotationsPredicate = injectionPointAnnotationsPredicate;
     }
 
     /**
@@ -97,26 +109,26 @@ public class BeanGenerator extends AbstractGenerator {
      * @param bean
      * @return a collection of resources
      */
-    Collection<Resource> generate(BeanInfo bean, ReflectionRegistration reflectionRegistration) {
+    Collection<Resource> generate(BeanInfo bean) {
         if (bean.getTarget().isPresent()) {
             AnnotationTarget target = bean.getTarget().get();
             switch (target.kind()) {
                 case CLASS:
-                    return generateClassBean(bean, target.asClass(), reflectionRegistration);
+                    return generateClassBean(bean, target.asClass());
                 case METHOD:
-                    return generateProducerMethodBean(bean, target.asMethod(), reflectionRegistration);
+                    return generateProducerMethodBean(bean, target.asMethod());
                 case FIELD:
-                    return generateProducerFieldBean(bean, target.asField(), reflectionRegistration);
+                    return generateProducerFieldBean(bean, target.asField());
                 default:
                     throw new IllegalArgumentException("Unsupported bean type");
             }
         } else {
             // Synthetic beans
-            return generateSyntheticBean(bean, reflectionRegistration);
+            return generateSyntheticBean(bean);
         }
     }
 
-    Collection<Resource> generateSyntheticBean(BeanInfo bean, ReflectionRegistration reflectionRegistration) {
+    Collection<Resource> generateSyntheticBean(BeanInfo bean) {
 
         StringBuilder baseNameBuilder = new StringBuilder();
         if (bean.getImplClazz().enclosingClass() != null) {
@@ -135,6 +147,10 @@ public class BeanGenerator extends AbstractGenerator {
         String providerTypeName = providerType.name().toString();
         String targetPackage = getPackageName(bean);
         String generatedName = generatedNameFromTarget(targetPackage, baseName, BEAN_SUFFIX);
+        beanToGeneratedName.put(bean, generatedName);
+        if (existingClasses.contains(generatedName)) {
+            return Collections.emptyList();
+        }
 
         boolean isApplicationClass = applicationClassPredicate.test(bean.getImplClazz().name());
         ResourceClassOutput classOutput = new ResourceClassOutput(isApplicationClass,
@@ -153,8 +169,7 @@ public class BeanGenerator extends AbstractGenerator {
         }
         if (bean.getScope().isNormal()) {
             // For normal scopes a client proxy is generated too
-            beanCreator.getFieldCreator(FIELD_NAME_PROXY, getProxyTypeName(bean, baseName))
-                    .setModifiers(ACC_PRIVATE | ACC_FINAL);
+            initializeProxy(bean, baseName, beanCreator);
         }
         FieldCreator stereotypes = null;
         if (!bean.getStereotypes().isEmpty()) {
@@ -229,12 +244,13 @@ public class BeanGenerator extends AbstractGenerator {
         if (bean.isDefaultBean()) {
             implementIsDefaultBean(bean, beanCreator);
         }
+        implementGetKind(beanCreator, InjectableBean.Kind.SYNTHETIC);
 
         beanCreator.close();
         return classOutput.getResources();
     }
 
-    Collection<Resource> generateClassBean(BeanInfo bean, ClassInfo beanClass, ReflectionRegistration reflectionRegistration) {
+    Collection<Resource> generateClassBean(BeanInfo bean, ClassInfo beanClass) {
 
         String baseName;
         if (beanClass.enclosingClass() != null) {
@@ -246,6 +262,10 @@ public class BeanGenerator extends AbstractGenerator {
         String providerTypeName = providerType.name().toString();
         String targetPackage = DotNames.packageName(providerType.name());
         String generatedName = generatedNameFromTarget(targetPackage, baseName, BEAN_SUFFIX);
+        beanToGeneratedName.put(bean, generatedName);
+        if (existingClasses.contains(generatedName)) {
+            return Collections.emptyList();
+        }
 
         boolean isApplicationClass = applicationClassPredicate.test(beanClass.name());
         ResourceClassOutput classOutput = new ResourceClassOutput(isApplicationClass,
@@ -264,8 +284,7 @@ public class BeanGenerator extends AbstractGenerator {
         }
         if (bean.getScope().isNormal()) {
             // For normal scopes a client proxy is generated too
-            beanCreator.getFieldCreator(FIELD_NAME_PROXY, getProxyTypeName(bean, baseName))
-                    .setModifiers(ACC_PRIVATE | ACC_FINAL);
+            initializeProxy(bean, baseName, beanCreator);
         }
         FieldCreator stereotypes = null;
         if (!bean.getStereotypes().isEmpty()) {
@@ -315,8 +334,7 @@ public class BeanGenerator extends AbstractGenerator {
         return classOutput.getResources();
     }
 
-    Collection<Resource> generateProducerMethodBean(BeanInfo bean, MethodInfo producerMethod,
-            ReflectionRegistration reflectionRegistration) {
+    Collection<Resource> generateProducerMethodBean(BeanInfo bean, MethodInfo producerMethod) {
 
         ClassInfo declaringClass = producerMethod.declaringClass();
         String declaringClassBase;
@@ -342,6 +360,10 @@ public class BeanGenerator extends AbstractGenerator {
         String providerTypeName = providerType.name().toString();
         String targetPackage = DotNames.packageName(declaringClass.name());
         String generatedName = generatedNameFromTarget(targetPackage, baseName, BEAN_SUFFIX);
+        beanToGeneratedName.put(bean, generatedName);
+        if (existingClasses.contains(generatedName)) {
+            return Collections.emptyList();
+        }
 
         boolean isApplicationClass = applicationClassPredicate.test(declaringClass.name());
         ResourceClassOutput classOutput = new ResourceClassOutput(isApplicationClass,
@@ -360,8 +382,7 @@ public class BeanGenerator extends AbstractGenerator {
         }
         if (bean.getScope().isNormal()) {
             // For normal scopes a client proxy is generated too
-            beanCreator.getFieldCreator(FIELD_NAME_PROXY, getProxyTypeName(bean, baseName))
-                    .setModifiers(ACC_PRIVATE | ACC_FINAL);
+            initializeProxy(bean, baseName, beanCreator);
         }
         FieldCreator stereotypes = null;
         if (!bean.getStereotypes().isEmpty()) {
@@ -406,13 +427,13 @@ public class BeanGenerator extends AbstractGenerator {
         if (bean.isDefaultBean()) {
             implementIsDefaultBean(bean, beanCreator);
         }
+        implementGetKind(beanCreator, InjectableBean.Kind.PRODUCER_METHOD);
 
         beanCreator.close();
         return classOutput.getResources();
     }
 
-    Collection<Resource> generateProducerFieldBean(BeanInfo bean, FieldInfo producerField,
-            ReflectionRegistration reflectionRegistration) {
+    Collection<Resource> generateProducerFieldBean(BeanInfo bean, FieldInfo producerField) {
 
         ClassInfo declaringClass = producerField.declaringClass();
         String declaringClassBase;
@@ -428,6 +449,10 @@ public class BeanGenerator extends AbstractGenerator {
         String providerTypeName = providerType.name().toString();
         String targetPackage = DotNames.packageName(declaringClass.name());
         String generatedName = generatedNameFromTarget(targetPackage, baseName, BEAN_SUFFIX);
+        beanToGeneratedName.put(bean, generatedName);
+        if (existingClasses.contains(generatedName)) {
+            return Collections.emptyList();
+        }
 
         boolean isApplicationClass = applicationClassPredicate.test(declaringClass.name());
         ResourceClassOutput classOutput = new ResourceClassOutput(isApplicationClass,
@@ -446,8 +471,7 @@ public class BeanGenerator extends AbstractGenerator {
         }
         if (bean.getScope().isNormal()) {
             // For normal scopes a client proxy is generated too
-            beanCreator.getFieldCreator(FIELD_NAME_PROXY, getProxyTypeName(bean, baseName))
-                    .setModifiers(ACC_PRIVATE | ACC_FINAL);
+            initializeProxy(bean, baseName, beanCreator);
         }
         FieldCreator stereotypes = null;
         if (!bean.getStereotypes().isEmpty()) {
@@ -487,6 +511,7 @@ public class BeanGenerator extends AbstractGenerator {
         if (bean.isDefaultBean()) {
             implementIsDefaultBean(bean, beanCreator);
         }
+        implementGetKind(beanCreator, InjectableBean.Kind.PRODUCER_FIELD);
 
         beanCreator.close();
         return classOutput.getResources();
@@ -567,7 +592,7 @@ public class BeanGenerator extends AbstractGenerator {
         // Invoke super()
         constructor.invokeSpecialMethod(MethodDescriptors.OBJECT_CONSTRUCTOR, constructor.getThis());
 
-        // Get the TCCL - we will use it later 
+        // Get the TCCL - we will use it later
         ResultHandle currentThread = constructor
                 .invokeStaticMethod(MethodDescriptors.THREAD_CURRENT_THREAD);
         ResultHandle tccl = constructor.invokeVirtualMethod(MethodDescriptors.THREAD_GET_TCCL, currentThread);
@@ -597,7 +622,7 @@ public class BeanGenerator extends AbstractGenerator {
                 builtinBean.getGenerator()
                         .generate(new GeneratorContext(classOutput, bean.getDeployment(), injectionPoint, beanCreator,
                                 constructor, injectionPointToProviderField.get(injectionPoint), annotationLiterals, bean,
-                                reflectionRegistration));
+                                reflectionRegistration, injectionPointAnnotationsPredicate));
             } else {
 
                 if (BuiltinScope.DEPENDENT.is(injectionPoint.getResolvedBean().getScope()) && (injectionPoint.getResolvedBean()
@@ -632,8 +657,13 @@ public class BeanGenerator extends AbstractGenerator {
         // Bean types
         ResultHandle typesHandle = constructor.newInstance(MethodDescriptor.ofConstructor(HashSet.class));
         for (org.jboss.jandex.Type type : bean.getTypes()) {
-            constructor.invokeInterfaceMethod(MethodDescriptors.SET_ADD, typesHandle,
-                    Types.getTypeHandle(constructor, type, tccl));
+            ResultHandle typeHandle;
+            try {
+                typeHandle = Types.getTypeHandle(constructor, type, tccl);
+            } catch (IllegalArgumentException e) {
+                throw new IllegalStateException("Unable to construct the type handle for " + bean + ": " + e.getMessage());
+            }
+            constructor.invokeInterfaceMethod(MethodDescriptors.SET_ADD, typesHandle, typeHandle);
         }
         ResultHandle unmodifiableTypesHandle = constructor.invokeStaticMethod(MethodDescriptors.COLLECTIONS_UNMODIFIABLE_SET,
                 typesHandle);
@@ -682,16 +712,6 @@ public class BeanGenerator extends AbstractGenerator {
                     constructor.getThis(),
                     unmodifiableStereotypesHandle);
         }
-
-        if (bean.getScope().isNormal()) {
-            // this.proxy = new Bar_ClientProxy(this)
-            String proxyTypeName = getProxyTypeName(bean, baseName);
-            constructor.writeInstanceField(FieldDescriptor.of(beanCreator.getClassName(), FIELD_NAME_PROXY, proxyTypeName),
-                    constructor.getThis(),
-                    constructor.newInstance(
-                            MethodDescriptor.ofConstructor(proxyTypeName, beanCreator.getClassName()), constructor.getThis()));
-        }
-
         return constructor;
     }
 
@@ -861,7 +881,8 @@ public class BeanGenerator extends AbstractGenerator {
     private List<ResultHandle> newProviderHandles(BeanInfo bean, ClassCreator beanCreator, MethodCreator createMethod,
             Map<InjectionPointInfo, String> injectionPointToProviderField,
             Map<InterceptorInfo, String> interceptorToProviderField,
-            Map<InterceptorInfo, ResultHandle> interceptorToWrap) {
+            Map<InterceptorInfo, ResultHandle> interceptorToWrap,
+            List<TransientReference> transientReferences) {
 
         List<ResultHandle> providerHandles = new ArrayList<>();
         Optional<Injection> constructorInjection = bean.getConstructorInjection();
@@ -876,8 +897,12 @@ public class BeanGenerator extends AbstractGenerator {
                         providerSupplierHandle);
                 ResultHandle childCtx = createMethod.invokeStaticMethod(MethodDescriptors.CREATIONAL_CTX_CHILD_CONTEXTUAL,
                         providerHandle, createMethod.getMethodParam(0));
-                providerHandles.add(createMethod.invokeInterfaceMethod(MethodDescriptors.INJECTABLE_REF_PROVIDER_GET,
-                        providerHandle, childCtx));
+                ResultHandle referenceHandle = createMethod.invokeInterfaceMethod(MethodDescriptors.INJECTABLE_REF_PROVIDER_GET,
+                        providerHandle, childCtx);
+                providerHandles.add(referenceHandle);
+                if (injectionPoint.isDependentTransientReference()) {
+                    transientReferences.add(new TransientReference(providerHandle, referenceHandle, childCtx));
+                }
             }
         }
         if (bean.isSubclassRequired()) {
@@ -1084,6 +1109,7 @@ public class BeanGenerator extends AbstractGenerator {
 
         List<InjectionPointInfo> injectionPoints = bean.getAllInjectionPoints();
         ResultHandle[] referenceHandles = new ResultHandle[injectionPoints.size()];
+        List<TransientReference> transientReferences = new ArrayList<>();
         int paramIdx = 0;
         for (InjectionPointInfo injectionPoint : injectionPoints) {
             ResultHandle providerSupplierHandle = create.readInstanceField(FieldDescriptor.of(beanCreator.getClassName(),
@@ -1096,6 +1122,10 @@ public class BeanGenerator extends AbstractGenerator {
             ResultHandle referenceHandle = create.invokeInterfaceMethod(MethodDescriptors.INJECTABLE_REF_PROVIDER_GET,
                     providerHandle, childCtxHandle);
             referenceHandles[paramIdx++] = referenceHandle;
+            // We need to destroy dependent beans for @TransientReference injection points
+            if (injectionPoint.isDependentTransientReference()) {
+                transientReferences.add(new TransientReference(providerHandle, referenceHandle, childCtxHandle));
+            }
         }
 
         if (Modifier.isPrivate(producerMethod.flags())) {
@@ -1138,6 +1168,9 @@ public class BeanGenerator extends AbstractGenerator {
             create.invokeInterfaceMethod(MethodDescriptors.INJECTABLE_BEAN_DESTROY, declaringProviderHandle,
                     declaringProviderInstanceHandle, ctxHandle);
         }
+        // Destroy injected transient references
+        destroyTransientReferences(create, transientReferences);
+
         create.returnValue(instanceHandle);
     }
 
@@ -1271,9 +1304,10 @@ public class BeanGenerator extends AbstractGenerator {
                 reflectionRegistration.registerMethod(noArgsConstructor);
             }
 
+            List<TransientReference> transientReferences = new ArrayList<>();
             List<ResultHandle> providerHandles = newProviderHandles(bean, beanCreator, create,
                     injectionPointToProviderSupplierField, interceptorToProviderSupplierField,
-                    interceptorToWrap);
+                    interceptorToWrap, transientReferences);
 
             // Forwarding function
             // Supplier<Object> forward = () -> new SimpleBean_Subclass(ctx,lifecycleInterceptorProvider1)
@@ -1282,7 +1316,10 @@ public class BeanGenerator extends AbstractGenerator {
             ResultHandle retHandle = newInstanceHandle(bean, beanCreator, funcBytecode, create, providerTypeName, baseName,
                     providerHandles,
                     reflectionRegistration, isApplicationClass);
+            // Destroy injected transient references
+            destroyTransientReferences(funcBytecode, transientReferences);
             funcBytecode.returnValue(retHandle);
+
             // Interceptor bindings
             ResultHandle bindingsHandle = create.newInstance(MethodDescriptor.ofConstructor(HashSet.class));
             for (AnnotationInstance binding : aroundConstructs.bindings) {
@@ -1309,11 +1346,14 @@ public class BeanGenerator extends AbstractGenerator {
                     invocationContextHandle));
 
         } else {
+            List<TransientReference> transientReferences = new ArrayList<>();
             create.assign(instanceHandle, newInstanceHandle(bean, beanCreator, create, create, providerTypeName, baseName,
                     newProviderHandles(bean, beanCreator, create, injectionPointToProviderSupplierField,
                             interceptorToProviderSupplierField,
-                            interceptorToWrap),
+                            interceptorToWrap, transientReferences),
                     reflectionRegistration, isApplicationClass));
+            // Destroy injected transient references
+            destroyTransientReferences(create, transientReferences);
         }
 
         // Perform field and initializer injections
@@ -1355,6 +1395,7 @@ public class BeanGenerator extends AbstractGenerator {
                     catchBlock.getCaughtException());
         }
         for (Injection methodInjection : methodInjections) {
+            List<TransientReference> transientReferences = new ArrayList<>();
             ResultHandle[] referenceHandles = new ResultHandle[methodInjection.injectionPoints.size()];
             int paramIdx = 0;
             for (InjectionPointInfo injectionPoint : methodInjection.injectionPoints) {
@@ -1369,6 +1410,10 @@ public class BeanGenerator extends AbstractGenerator {
                 ResultHandle referenceHandle = create.invokeInterfaceMethod(MethodDescriptors.INJECTABLE_REF_PROVIDER_GET,
                         providerHandle, childCtxHandle);
                 referenceHandles[paramIdx++] = referenceHandle;
+                // We need to destroy dependent beans for @TransientReference injection points
+                if (injectionPoint.isDependentTransientReference()) {
+                    transientReferences.add(new TransientReference(providerHandle, referenceHandle, childCtxHandle));
+                }
             }
 
             MethodInfo initializerMethod = methodInjection.target.asMethod();
@@ -1395,6 +1440,9 @@ public class BeanGenerator extends AbstractGenerator {
                 create.invokeVirtualMethod(MethodDescriptor.of(methodInjection.target.asMethod()), instanceHandle,
                         referenceHandles);
             }
+
+            // Destroy injected transient references
+            destroyTransientReferences(create, transientReferences);
         }
 
         // PostConstruct lifecycle callback interceptors
@@ -1431,10 +1479,12 @@ public class BeanGenerator extends AbstractGenerator {
                     DotNames.POST_CONSTRUCT,
                     bean.getDeployment().getIndex());
             for (MethodInfo callback : postConstructCallbacks) {
-                if (Modifier.isPrivate(callback.flags())) {
-                    privateMembers.add(isApplicationClass,
-                            String.format("@PostConstruct callback %s#%s()", callback.declaringClass().name(),
-                                    callback.name()));
+                if (isReflectionFallbackNeeded(callback, targetPackage)) {
+                    if (Modifier.isPrivate(callback.flags())) {
+                        privateMembers.add(isApplicationClass,
+                                String.format("@PostConstruct callback %s#%s()", callback.declaringClass().name(),
+                                        callback.name()));
+                    }
                     reflectionRegistration.registerMethod(callback);
                     create.invokeStaticMethod(MethodDescriptors.REFLECTIONS_INVOKE_METHOD,
                             create.loadClass(callback.declaringClass().name().toString()),
@@ -1505,11 +1555,10 @@ public class BeanGenerator extends AbstractGenerator {
             get.returnValue(
                     get.invokeInterfaceMethod(MethodDescriptors.CONTEXT_GET, context, get.getThis(), creationalContext));
         } else if (bean.getScope().isNormal()) {
-            // return proxy.get()
-            ResultHandle proxy = get.readInstanceField(
-                    FieldDescriptor.of(beanCreator.getClassName(), FIELD_NAME_PROXY, getProxyTypeName(bean, baseName)),
-                    get.getThis());
-            get.returnValue(proxy);
+            // return proxy()
+            get.returnValue(get.invokeVirtualMethod(
+                    MethodDescriptor.ofMethod(beanCreator.getClassName(), FIELD_NAME_PROXY, getProxyTypeName(bean, baseName)),
+                    get.getThis()));
         } else {
             ResultHandle instance = get.invokeVirtualMethod(
                     MethodDescriptor.ofMethod(beanCreator.getClassName(), "create", providerTypeName, CreationalContext.class),
@@ -1613,6 +1662,12 @@ public class BeanGenerator extends AbstractGenerator {
         }
     }
 
+    protected void implementGetKind(ClassCreator beanCreator, InjectableBean.Kind kind) {
+        MethodCreator getScope = beanCreator.getMethodCreator("getKind", InjectableBean.Kind.class).setModifiers(ACC_PUBLIC);
+        getScope.returnValue(getScope
+                .readStaticField(FieldDescriptor.of(InjectableBean.Kind.class, kind.toString(), InjectableBean.Kind.class)));
+    }
+
     protected void implementSupplierGet(ClassCreator beanCreator) {
         MethodCreator get = beanCreator.getMethodCreator("get", Object.class).setModifiers(ACC_PUBLIC);
         get.returnValue(get.getThis());
@@ -1625,11 +1680,10 @@ public class BeanGenerator extends AbstractGenerator {
     private ResultHandle wrapCurrentInjectionPoint(ClassOutput classOutput, ClassCreator beanCreator, BeanInfo bean,
             MethodCreator constructor, InjectionPointInfo injectionPoint, int paramIdx, ResultHandle tccl,
             ReflectionRegistration reflectionRegistration) {
-        ResultHandle requiredQualifiersHandle = collectQualifiers(classOutput, beanCreator, bean.getDeployment(), constructor,
-                injectionPoint,
-                annotationLiterals);
-        ResultHandle annotationsHandle = collectAnnotations(classOutput, beanCreator, bean.getDeployment(), constructor,
-                injectionPoint, annotationLiterals);
+        ResultHandle requiredQualifiersHandle = collectInjectionPointQualifiers(classOutput, beanCreator, bean.getDeployment(),
+                constructor, injectionPoint, annotationLiterals);
+        ResultHandle annotationsHandle = collectInjectionPointAnnotations(classOutput, beanCreator, bean.getDeployment(),
+                constructor, injectionPoint, annotationLiterals, injectionPointAnnotationsPredicate);
         ResultHandle javaMemberHandle = getJavaMemberHandle(constructor, injectionPoint, reflectionRegistration);
 
         return constructor.newInstance(
@@ -1639,6 +1693,28 @@ public class BeanGenerator extends AbstractGenerator {
                 constructor.getThis(), constructor.getMethodParam(paramIdx),
                 Types.getTypeHandle(constructor, injectionPoint.getRequiredType(), tccl),
                 requiredQualifiersHandle, annotationsHandle, javaMemberHandle, constructor.load(injectionPoint.getPosition()));
+    }
+
+    private void initializeProxy(BeanInfo bean, String baseName, ClassCreator beanCreator) {
+        // Add proxy volatile field
+        String proxyTypeName = getProxyTypeName(bean, baseName);
+        beanCreator.getFieldCreator(FIELD_NAME_PROXY, proxyTypeName)
+                .setModifiers(ACC_PRIVATE | ACC_VOLATILE);
+
+        // Add proxy() method
+        MethodCreator proxy = beanCreator.getMethodCreator(FIELD_NAME_PROXY, proxyTypeName).setModifiers(ACC_PRIVATE);
+        AssignableResultHandle proxyInstance = proxy.createVariable(DescriptorUtils.extToInt(proxyTypeName));
+        proxy.assign(proxyInstance, proxy.readInstanceField(
+                FieldDescriptor.of(beanCreator.getClassName(), FIELD_NAME_PROXY, proxyTypeName),
+                proxy.getThis()));
+        // Create a new proxy instance, atomicity does not really matter here
+        BytecodeCreator proxyNull = proxy.ifNull(proxyInstance).trueBranch();
+        proxyNull.assign(proxyInstance, proxyNull.newInstance(
+                MethodDescriptor.ofConstructor(proxyTypeName, beanCreator.getClassName()), proxyNull.getThis()));
+        proxyNull.writeInstanceField(FieldDescriptor.of(beanCreator.getClassName(), FIELD_NAME_PROXY, proxyTypeName),
+                proxyNull.getThis(),
+                proxyInstance);
+        proxy.returnValue(proxyInstance);
     }
 
     static ResultHandle getJavaMemberHandle(MethodCreator constructor,
@@ -1682,9 +1758,9 @@ public class BeanGenerator extends AbstractGenerator {
         return javaMemberHandle;
     }
 
-    static ResultHandle collectAnnotations(ClassOutput classOutput, ClassCreator beanCreator, BeanDeployment beanDeployment,
-            MethodCreator constructor,
-            InjectionPointInfo injectionPoint, AnnotationLiteralProcessor annotationLiterals) {
+    static ResultHandle collectInjectionPointAnnotations(ClassOutput classOutput, ClassCreator beanCreator,
+            BeanDeployment beanDeployment, MethodCreator constructor, InjectionPointInfo injectionPoint,
+            AnnotationLiteralProcessor annotationLiterals, Predicate<DotName> injectionPointAnnotationsPredicate) {
         ResultHandle annotationsHandle = constructor.newInstance(MethodDescriptor.ofConstructor(HashSet.class));
         Collection<AnnotationInstance> annotations;
         if (Kind.FIELD.equals(injectionPoint.getTarget().kind())) {
@@ -1696,22 +1772,28 @@ public class BeanGenerator extends AbstractGenerator {
                     method, injectionPoint.getPosition());
         }
         for (AnnotationInstance annotation : annotations) {
+            if (!injectionPointAnnotationsPredicate.test(annotation.name())) {
+                continue;
+            }
+            ResultHandle annotationHandle;
             if (DotNames.INJECT.equals(annotation.name())) {
-                constructor.invokeInterfaceMethod(MethodDescriptors.SET_ADD, annotationsHandle,
-                        constructor.readStaticField(FieldDescriptor.of(InjectLiteral.class, "INSTANCE", InjectLiteral.class)));
+                annotationHandle = constructor
+                        .readStaticField(FieldDescriptor.of(InjectLiteral.class, "INSTANCE", InjectLiteral.class));
             } else {
                 // Create annotation literal if needed
                 ClassInfo literalClass = getClassByName(beanDeployment.getIndex(), annotation.name());
-                constructor.invokeInterfaceMethod(MethodDescriptors.SET_ADD, annotationsHandle,
-                        annotationLiterals.process(constructor,
-                                classOutput, literalClass, annotation,
-                                Types.getPackageName(beanCreator.getClassName())));
+                annotationHandle = annotationLiterals.process(constructor,
+                        classOutput, literalClass, annotation,
+                        Types.getPackageName(beanCreator.getClassName()));
             }
+            constructor.invokeInterfaceMethod(MethodDescriptors.SET_ADD, annotationsHandle,
+                    annotationHandle);
         }
         return annotationsHandle;
     }
 
-    static ResultHandle collectQualifiers(ClassOutput classOutput, ClassCreator beanCreator, BeanDeployment beanDeployment,
+    static ResultHandle collectInjectionPointQualifiers(ClassOutput classOutput, ClassCreator beanCreator,
+            BeanDeployment beanDeployment,
             MethodCreator constructor,
             InjectionPointInfo injectionPoint, AnnotationLiteralProcessor annotationLiterals) {
         ResultHandle requiredQualifiersHandle;
@@ -1721,20 +1803,41 @@ public class BeanGenerator extends AbstractGenerator {
             requiredQualifiersHandle = constructor.newInstance(MethodDescriptor.ofConstructor(HashSet.class));
             for (AnnotationInstance qualifierAnnotation : injectionPoint.getRequiredQualifiers()) {
                 BuiltinQualifier qualifier = BuiltinQualifier.of(qualifierAnnotation);
+                ResultHandle qualifierHandle;
                 if (qualifier != null) {
-                    constructor.invokeInterfaceMethod(MethodDescriptors.SET_ADD, requiredQualifiersHandle,
-                            qualifier.getLiteralInstance(constructor));
+                    qualifierHandle = qualifier.getLiteralInstance(constructor);
                 } else {
                     // Create annotation literal if needed
-                    ClassInfo qualifierClass = beanDeployment.getQualifier(qualifierAnnotation.name());
-                    constructor.invokeInterfaceMethod(MethodDescriptors.SET_ADD, requiredQualifiersHandle,
-                            annotationLiterals.process(constructor,
-                                    classOutput, qualifierClass, qualifierAnnotation,
-                                    Types.getPackageName(beanCreator.getClassName())));
+                    qualifierHandle = annotationLiterals.process(constructor,
+                            classOutput, beanDeployment.getQualifier(qualifierAnnotation.name()), qualifierAnnotation,
+                            Types.getPackageName(beanCreator.getClassName()));
                 }
+                constructor.invokeInterfaceMethod(MethodDescriptors.SET_ADD, requiredQualifiersHandle,
+                        qualifierHandle);
             }
         }
         return requiredQualifiersHandle;
+    }
+
+    static void destroyTransientReferences(BytecodeCreator bytecode, Iterable<TransientReference> transientReferences) {
+        for (TransientReference transientReference : transientReferences) {
+            bytecode.invokeStaticMethod(MethodDescriptors.INJECTABLE_REFERENCE_PROVIDERS_DESTROY, transientReference.provider,
+                    transientReference.instance, transientReference.creationalContext);
+        }
+    }
+
+    static class TransientReference {
+
+        final ResultHandle provider;
+        final ResultHandle instance;
+        final ResultHandle creationalContext;
+
+        public TransientReference(ResultHandle provider, ResultHandle contextualInstance, ResultHandle creationalContext) {
+            this.provider = provider;
+            this.instance = contextualInstance;
+            this.creationalContext = creationalContext;
+        }
+
     }
 
 }

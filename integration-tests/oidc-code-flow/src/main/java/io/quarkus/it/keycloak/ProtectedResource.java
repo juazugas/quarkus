@@ -4,6 +4,7 @@ import javax.inject.Inject;
 import javax.ws.rs.GET;
 import javax.ws.rs.InternalServerErrorException;
 import javax.ws.rs.Path;
+import javax.ws.rs.QueryParam;
 
 import org.eclipse.microprofile.jwt.JsonWebToken;
 
@@ -55,6 +56,36 @@ public class ProtectedResource {
     }
 
     @GET
+    @Path("callback-jwt-before-redirect")
+    public String getNameCallbackJwtBeforeRedirect() {
+        throw new InternalServerErrorException("This method must not be invoked");
+    }
+
+    @GET
+    @Path("callback-jwt-after-redirect")
+    public String getNameCallbackJwtAfterRedirect() {
+        return "callback-jwt:" + getName();
+    }
+
+    @GET
+    @Path("callback-jwt-not-used-before-redirect")
+    public String getNameCallbackJwtNotUsedBeforeRedirect() {
+        throw new InternalServerErrorException("This method must not be invoked");
+    }
+
+    @GET
+    @Path("callback-jwt-not-used-after-redirect")
+    public String getNameCallbackJwtNotUsedAfterRedirect() {
+        throw new InternalServerErrorException("This method must not be invoked");
+    }
+
+    @GET
+    @Path("tenant-logout")
+    public String getTenantLogout() {
+        return "Tenant Logout";
+    }
+
+    @GET
     @Path("access")
     public String getAccessToken() {
         if (!accessTokenCredential.getToken().equals(accessToken.getRawToken())) {
@@ -70,5 +101,11 @@ public class ProtectedResource {
             throw new OIDCException("Refresh token values are not equal");
         }
         return refreshToken.getToken() != null && !refreshToken.getToken().isEmpty() ? "RT injected" : "no refresh";
+    }
+
+    @GET
+    @Path("refresh-query")
+    public String refresh(@QueryParam("a") String aValue) {
+        return refresh() + ":" + aValue;
     }
 }

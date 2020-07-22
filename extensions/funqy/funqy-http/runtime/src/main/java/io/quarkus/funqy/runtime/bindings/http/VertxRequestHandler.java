@@ -2,12 +2,14 @@ package io.quarkus.funqy.runtime.bindings.http;
 
 import java.io.InputStream;
 import java.util.concurrent.Executor;
+import java.util.function.Consumer;
 
 import javax.enterprise.inject.Instance;
 import javax.enterprise.inject.spi.CDI;
 
 import org.jboss.logging.Logger;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectReader;
 import com.fasterxml.jackson.databind.ObjectWriter;
 
@@ -18,8 +20,10 @@ import io.quarkus.funqy.runtime.FunctionInvoker;
 import io.quarkus.funqy.runtime.FunctionRecorder;
 import io.quarkus.funqy.runtime.RequestContextImpl;
 import io.quarkus.security.identity.CurrentIdentityAssociation;
+import io.quarkus.security.identity.SecurityIdentity;
 import io.quarkus.vertx.http.runtime.CurrentVertxRequest;
 import io.quarkus.vertx.http.runtime.security.QuarkusHttpUser;
+import io.smallrye.mutiny.Uni;
 import io.vertx.core.Handler;
 import io.vertx.core.Vertx;
 import io.vertx.core.http.HttpMethod;
@@ -41,19 +45,36 @@ public class VertxRequestHandler implements Handler<RoutingContext> {
             Executor executor) {
         this.vertx = vertx;
         this.beanContainer = beanContainer;
+        // make sure rootPath ends with "/" for easy parsing
         if (rootPath == null) {
             this.rootPath = "/";
+        } else if (!rootPath.endsWith("/")) {
+            this.rootPath = rootPath + "/";
         } else {
-            if (rootPath.startsWith("/")) {
-                this.rootPath = rootPath;
-            } else {
-                this.rootPath = "/" + rootPath;
-            }
+            this.rootPath = rootPath;
         }
+
         this.executor = executor;
         Instance<CurrentIdentityAssociation> association = CDI.current().select(CurrentIdentityAssociation.class);
         this.association = association.isResolvable() ? association.get() : null;
         currentVertxRequest = CDI.current().select(CurrentVertxRequest.class).get();
+    }
+
+    private boolean checkHttpMethod(RoutingContext routingContext, FunctionInvoker invoker) {
+        if (invoker.hasInput()) {
+            if (routingContext.request().method() != HttpMethod.POST) {
+                routingContext.fail(405);
+                log.error("Must be POST for: " + invoker.getName());
+                return false;
+            }
+        }
+        if (routingContext.request().method() != HttpMethod.POST && routingContext.request().method() != HttpMethod.GET) {
+            routingContext.fail(405);
+            log.error("Must be POST or GET for: " + invoker.getName());
+            return false;
+
+        }
+        return true;
     }
 
     @Override
@@ -63,10 +84,12 @@ public class VertxRequestHandler implements Handler<RoutingContext> {
             request.fail(404);
             return;
         }
+        // expects rootPath to end with '/'
         if (!path.startsWith(rootPath)) {
             request.fail(404);
             return;
         }
+
         path = path.substring(rootPath.length());
 
         FunctionInvoker invoker = FunctionRecorder.registry.matchInvoker(path);
@@ -76,10 +99,8 @@ public class VertxRequestHandler implements Handler<RoutingContext> {
             return;
         }
 
-        if (request.request().method() != HttpMethod.POST) {
-            request.fail(405);
+        if (!checkHttpMethod(request, invoker))
             return;
-        }
 
         request.request().bodyHandler(buff -> {
             Object input = null;
@@ -104,22 +125,34 @@ public class VertxRequestHandler implements Handler<RoutingContext> {
     private void dispatch(RoutingContext routingContext, FunctionInvoker invoker, Object input) {
         ManagedContext requestContext = beanContainer.requestContext();
         requestContext.activate();
-        QuarkusHttpUser user = (QuarkusHttpUser) routingContext.user();
-        if (user != null && association != null) {
-            association.setIdentity(user.getSecurityIdentity());
+        if (association != null) {
+            ((Consumer<Uni<SecurityIdentity>>) association).accept(QuarkusHttpUser.getSecurityIdentity(routingContext, null));
         }
         currentVertxRequest.setCurrent(routingContext);
         try {
             FunqyRequestImpl funqyRequest = new FunqyRequestImpl(new RequestContextImpl(), input);
             FunqyResponseImpl funqyResponse = new FunqyResponseImpl();
             invoker.invoke(funqyRequest, funqyResponse);
-            routingContext.response().setStatusCode(200);
-            if (invoker.hasOutput()) {
-                ObjectWriter writer = (ObjectWriter) invoker.getBindingContext().get(ObjectWriter.class.getName());
-                routingContext.response().end(writer.writeValueAsString(funqyResponse.getOutput()));
-            } else {
-                routingContext.response().end();
-            }
+
+            funqyResponse.getOutput().emitOn(executor).subscribe().with(
+                    o -> {
+                        if (invoker.hasOutput()) {
+                            routingContext.response().setStatusCode(200);
+                            routingContext.response().putHeader("Content-Type", "application/json");
+                            ObjectWriter writer = (ObjectWriter) invoker.getBindingContext().get(ObjectWriter.class.getName());
+                            try {
+                                routingContext.response().end(writer.writeValueAsString(o));
+                            } catch (JsonProcessingException e) {
+                                log.error("Failed to marshal", e);
+                                routingContext.fail(400);
+                            }
+                        } else {
+                            routingContext.response().setStatusCode(204);
+                            routingContext.response().end();
+                        }
+                    },
+                    t -> routingContext.fail(t));
+
         } catch (Exception e) {
             routingContext.fail(e);
         } finally {

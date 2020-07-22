@@ -1,7 +1,9 @@
 package io.quarkus.it.mongodb.panache.person;
 
 import java.net.URI;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import javax.inject.Inject;
 import javax.ws.rs.*;
@@ -14,6 +16,10 @@ import io.quarkus.panache.common.Sort;
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)
 public class PersonRepositoryResource {
+
+    // fake unused injection point to force ArC to not remove this otherwise I can't mock it in the tests
+    @Inject
+    MockablePersonRepository mockablePersonRepository;
 
     @Inject
     PersonRepository personRepository;
@@ -28,8 +34,11 @@ public class PersonRepositoryResource {
 
     @GET
     @Path("/search/{name}")
-    public List<PersonName> searchPersons(@PathParam("name") String name) {
-        return personRepository.find("lastname", name).project(PersonName.class).list();
+    public Set<PersonName> searchPersons(@PathParam("name") String name) {
+        Set<PersonName> uniqueNames = new HashSet<>();
+        List<PersonName> lastnames = personRepository.find("lastname", name).project(PersonName.class).list();
+        lastnames.forEach(p -> uniqueNames.add(p));// this will throw if it's not the right type
+        return uniqueNames;
     }
 
     @POST
@@ -80,5 +89,12 @@ public class PersonRepositoryResource {
     @DELETE
     public void deleteAll() {
         personRepository.deleteAll();
+    }
+
+    @POST
+    @Path("/rename")
+    public Response rename(@QueryParam("previousName") String previousName, @QueryParam("newName") String newName) {
+        personRepository.update("lastname", newName).where("lastname", previousName);
+        return Response.ok().build();
     }
 }

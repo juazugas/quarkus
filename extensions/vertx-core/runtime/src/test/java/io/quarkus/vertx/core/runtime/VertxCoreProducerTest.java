@@ -1,19 +1,18 @@
 package io.quarkus.vertx.core.runtime;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.fail;
-
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Optional;
 import java.util.OptionalInt;
-import java.util.function.Supplier;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import io.quarkus.vertx.core.runtime.VertxCoreRecorder.VertxOptionsCustomizer;
 import io.quarkus.vertx.core.runtime.config.ClusterConfiguration;
 import io.quarkus.vertx.core.runtime.config.EventBusConfiguration;
 import io.quarkus.vertx.core.runtime.config.JksConfiguration;
@@ -22,48 +21,20 @@ import io.quarkus.vertx.core.runtime.config.PemTrustCertConfiguration;
 import io.quarkus.vertx.core.runtime.config.PfxConfiguration;
 import io.quarkus.vertx.core.runtime.config.VertxConfiguration;
 import io.vertx.core.Vertx;
+import io.vertx.core.VertxOptions;
 
 public class VertxCoreProducerTest {
 
     private VertxCoreRecorder recorder;
-    private VertxCoreProducer producer;
 
     @BeforeEach
     public void setUp() throws Exception {
-        producer = new VertxCoreProducer();
         recorder = new VertxCoreRecorder();
     }
 
     @AfterEach
     public void tearDown() throws Exception {
         recorder.destroy();
-    }
-
-    @Test
-    public void shouldNotFailWithoutConfig() {
-        producer.initialize(new Supplier<Vertx>() {
-            @Override
-            public Vertx get() {
-                return VertxCoreRecorder.initialize(null);
-            }
-        });
-        verifyProducer();
-    }
-
-    private void verifyProducer() {
-        assertThat(producer.vertx()).isNotNull();
-        assertFalse(producer.vertx().isClustered());
-    }
-
-    @Test
-    public void shouldNotFailWithDefaultConfig() {
-        VertxConfiguration configuration = createDefaultConfiguration();
-        configuration.workerPoolSize = 10;
-        configuration.warningExceptionTime = Duration.ofSeconds(1);
-        configuration.internalBlockingPoolSize = 5;
-        VertxCoreRecorder.vertx = new VertxCoreRecorder.VertxSupplier(configuration);
-        producer.initialize(VertxCoreRecorder.vertx);
-        verifyProducer();
     }
 
     @Test
@@ -82,11 +53,26 @@ public class VertxCoreProducerTest {
         configuration.cluster = cc;
 
         try {
-            VertxCoreRecorder.initialize(configuration);
-            fail("It should not have a cluster manager on the classpath, and so fail the creation");
+            VertxCoreRecorder.initialize(configuration, null);
+            Assertions.fail("It should not have a cluster manager on the classpath, and so fail the creation");
         } catch (IllegalStateException e) {
-            assertTrue(e.getMessage().contains("No ClusterManagerFactory"));
+            Assertions.assertTrue(e.getMessage().contains("No ClusterManagerFactory"),
+                    "The message should contain ''. Message: " + e.getMessage());
         }
+    }
+
+    @Test
+    public void shouldInvokeCustomizers() {
+        final AtomicBoolean called = new AtomicBoolean(false);
+        VertxOptionsCustomizer customizers = new VertxOptionsCustomizer(Arrays.asList(
+                new Consumer<VertxOptions>() {
+                    @Override
+                    public void accept(VertxOptions vertxOptions) {
+                        called.set(true);
+                    }
+                }));
+        Vertx v = VertxCoreRecorder.initialize(createDefaultConfiguration(), customizers);
+        Assertions.assertTrue(called.get(), "Customizer should get called during initialization");
     }
 
     private VertxConfiguration createDefaultConfiguration() {

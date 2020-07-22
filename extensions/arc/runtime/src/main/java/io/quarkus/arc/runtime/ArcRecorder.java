@@ -46,8 +46,12 @@ public class ArcRecorder {
         Arc.setExecutor(executor);
     }
 
-    public void initSupplierBeans(Map<String, Supplier<?>> beans) {
+    public void initStaticSupplierBeans(Map<String, Supplier<?>> beans) {
         supplierMap = new ConcurrentHashMap<>(beans);
+    }
+
+    public void initRuntimeSupplierBeans(Map<String, Supplier<?>> beans) {
+        supplierMap.putAll(beans);
     }
 
     public BeanContainer initBeanContainer(ArcContainer container, List<BeanContainerListener> listeners,
@@ -120,6 +124,15 @@ public class ArcRecorder {
             @Override
             public Object get() {
                 return value.getValue();
+            }
+        };
+    }
+
+    public BeanContainerListener initCommandLineArgs(Supplier<String[]> args) {
+        return new BeanContainerListener() {
+            @Override
+            public void created(BeanContainer container) {
+                container.instance(CommandLineArgumentsProducer.class).setCommandLineArgs(args);
             }
         };
     }

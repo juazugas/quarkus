@@ -16,7 +16,7 @@ import io.quarkus.test.common.QuarkusTestResourceLifecycleManager;
 
 public class MongoTestResource implements QuarkusTestResourceLifecycleManager {
 
-    private static final Logger LOGGER = Logger.getLogger(MongodbPanacheResourceTest.class);
+    private static final Logger LOGGER = Logger.getLogger(MongoTestResource.class);
     private static MongodExecutable MONGO;
 
     @Override
@@ -29,12 +29,37 @@ public class MongoTestResource implements QuarkusTestResourceLifecycleManager {
                     .version(version)
                     .net(new Net(port, Network.localhostIsIPv6()))
                     .build();
-            MONGO = MongodStarter.getDefaultInstance().prepare(config);
-            MONGO.start();
+            MONGO = getMongodExecutable(config);
+            try {
+                MONGO.start();
+            } catch (Exception e) {
+                //every so often mongo fails to start on CI runs
+                //see if this helps
+                Thread.sleep(1000);
+                MONGO.start();
+            }
             return Collections.emptyMap();
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    }
+
+    private MongodExecutable getMongodExecutable(IMongodConfig config) {
+        try {
+            return doGetExecutable(config);
+        } catch (Exception e) {
+            // sometimes the download process can timeout so just sleep and try again
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException ignored) {
+
+            }
+            return doGetExecutable(config);
+        }
+    }
+
+    private MongodExecutable doGetExecutable(IMongodConfig config) {
+        return MongodStarter.getDefaultInstance().prepare(config);
     }
 
     @Override

@@ -1,25 +1,31 @@
 package io.quarkus.vertx.core.runtime;
 
+import static io.quarkus.vertx.core.runtime.SSLConfigHelper.configureJksKeyCertOptions;
+import static io.quarkus.vertx.core.runtime.SSLConfigHelper.configurePemKeyCertOptions;
+import static io.quarkus.vertx.core.runtime.SSLConfigHelper.configurePemTrustOptions;
+import static io.quarkus.vertx.core.runtime.SSLConfigHelper.configurePfxKeyCertOptions;
+import static io.quarkus.vertx.core.runtime.SSLConfigHelper.configurePfxTrustOptions;
 import static io.vertx.core.file.impl.FileResolver.CACHE_DIR_BASE_PROP_NAME;
 
 import java.io.File;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
-import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 import org.jboss.logging.Logger;
 import org.wildfly.common.cpu.ProcessorInfo;
 
 import io.netty.channel.EventLoopGroup;
-import io.quarkus.arc.runtime.BeanContainer;
+import io.netty.util.concurrent.EventExecutor;
 import io.quarkus.runtime.IOThreadDetector;
 import io.quarkus.runtime.LaunchMode;
 import io.quarkus.runtime.ShutdownContext;
@@ -27,17 +33,16 @@ import io.quarkus.runtime.annotations.Recorder;
 import io.quarkus.vertx.core.runtime.config.ClusterConfiguration;
 import io.quarkus.vertx.core.runtime.config.EventBusConfiguration;
 import io.quarkus.vertx.core.runtime.config.VertxConfiguration;
+import io.vertx.core.AsyncResult;
 import io.vertx.core.Context;
+import io.vertx.core.Handler;
+import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
 import io.vertx.core.VertxOptions;
 import io.vertx.core.eventbus.EventBusOptions;
 import io.vertx.core.file.FileSystemOptions;
 import io.vertx.core.http.ClientAuth;
 import io.vertx.core.impl.VertxImpl;
-import io.vertx.core.net.JksOptions;
-import io.vertx.core.net.PemKeyCertOptions;
-import io.vertx.core.net.PemTrustOptions;
-import io.vertx.core.net.PfxOptions;
 import io.vertx.core.spi.resolver.ResolverProvider;
 
 @Recorder
@@ -45,16 +50,20 @@ public class VertxCoreRecorder {
 
     private static final Logger LOGGER = Logger.getLogger(VertxCoreRecorder.class.getName());
 
-    private static final Pattern COMMA_PATTERN = Pattern.compile(",");
-
     static volatile VertxSupplier vertx;
 
-    public Supplier<Vertx> configureVertx(BeanContainer container, VertxConfiguration config,
-            LaunchMode launchMode, ShutdownContext shutdown) {
-        vertx = new VertxSupplier(config);
-        VertxCoreProducer producer = container.instance(VertxCoreProducer.class);
-        producer.initialize(vertx);
+    static volatile int blockingThreadPoolSize;
+
+    /**
+     * This is a bit of a hack. In dev mode we undeploy all the verticles on restart, except
+     * for this one
+     */
+    private static volatile String webDeploymentId;
+
+    public Supplier<Vertx> configureVertx(VertxConfiguration config,
+            LaunchMode launchMode, ShutdownContext shutdown, List<Consumer<VertxOptions>> customizers) {
         if (launchMode != LaunchMode.DEVELOPMENT) {
+            vertx = new VertxSupplier(config, customizers);
             // we need this to be part of the last shutdown tasks because closing it early (basically before Arc)
             // could cause problem to beans that rely on Vert.x and contain shutdown tasks
             shutdown.addLastShutdownTask(new Runnable() {
@@ -63,8 +72,72 @@ public class VertxCoreRecorder {
                     destroy();
                 }
             });
+        } else {
+            if (vertx == null) {
+                vertx = new VertxSupplier(config, customizers);
+            } else if (vertx.v != null) {
+                tryCleanTccl(vertx.v);
+            }
+            shutdown.addLastShutdownTask(new Runnable() {
+                @Override
+                public void run() {
+                    List<CountDownLatch> latches = new ArrayList<>();
+                    if (vertx.v != null) {
+                        Set<String> ids = new HashSet<>(vertx.v.deploymentIDs());
+                        for (String id : ids) {
+                            if (!id.equals(webDeploymentId)) {
+                                CountDownLatch latch = new CountDownLatch(1);
+                                latches.add(latch);
+                                vertx.v.undeploy(id, new Handler<AsyncResult<Void>>() {
+                                    @Override
+                                    public void handle(AsyncResult<Void> event) {
+                                        latch.countDown();
+                                    }
+                                });
+                            }
+                        }
+                        for (CountDownLatch latch : latches) {
+                            try {
+                                latch.await();
+                            } catch (InterruptedException e) {
+                                LOGGER.error("Failed waiting for verticle undeploy", e);
+                            }
+                        }
+                    }
+                }
+            });
         }
         return vertx;
+    }
+
+    private void tryCleanTccl(Vertx devModeVertx) {
+        //this is a best effort attempt to clean out the old TCCL from
+        ClassLoader cl = Thread.currentThread().getContextClassLoader();
+        for (int i = 0; i < blockingThreadPoolSize; ++i) {
+            devModeVertx.executeBlocking(new Handler<Promise<Object>>() {
+                @Override
+                public void handle(Promise<Object> event) {
+                    Thread.currentThread().setContextClassLoader(cl);
+                    try {
+                        Thread.sleep(50);
+                    } catch (InterruptedException e) {
+
+                    }
+                }
+            }, null);
+        }
+        EventLoopGroup group = ((VertxImpl) devModeVertx).getEventLoopGroup();
+        for (EventExecutor i : group) {
+            i.execute(new Runnable() {
+
+                @Override
+                public void run() {
+                    Thread.currentThread().setContextClassLoader(cl);
+                }
+
+            });
+        }
+
     }
 
     public IOThreadDetector detector() {
@@ -76,16 +149,39 @@ public class VertxCoreRecorder {
         };
     }
 
+    static void shutdownDevMode() {
+        if (vertx != null) {
+            CountDownLatch latch = new CountDownLatch(1);
+            vertx.get().close(new Handler<AsyncResult<Void>>() {
+                @Override
+                public void handle(AsyncResult<Void> event) {
+                    latch.countDown();
+                }
+            });
+            try {
+                latch.await();
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+
     public static Supplier<Vertx> getVertx() {
         return vertx;
     }
 
-    public static Vertx initialize(VertxConfiguration conf) {
-        if (conf == null) {
-            return logVertxInitialization(Vertx.vertx());
+    public static Vertx initialize(VertxConfiguration conf, VertxOptionsCustomizer customizer) {
+
+        VertxOptions options = new VertxOptions();
+
+        if (conf != null) {
+            convertToVertxOptions(conf, options, true);
         }
 
-        VertxOptions options = convertToVertxOptions(conf, true);
+        // Allow extension customizers to do their thing
+        if (customizer != null) {
+            customizer.customize(options);
+        }
 
         Vertx vertx;
         if (options.getEventBusOptions().isClustered()) {
@@ -109,12 +205,11 @@ public class VertxCoreRecorder {
         return vertx;
     }
 
-    private static VertxOptions convertToVertxOptions(VertxConfiguration conf, boolean allowClustering) {
+    private static VertxOptions convertToVertxOptions(VertxConfiguration conf, VertxOptions options, boolean allowClustering) {
+
         if (!conf.useAsyncDNS) {
             System.setProperty(ResolverProvider.DISABLE_DNS_RESOLVER_PROP_NAME, "true");
         }
-
-        VertxOptions options = new VertxOptions();
 
         if (allowClustering) {
             // Order matters, as the cluster options modifies the event bus options.
@@ -131,6 +226,7 @@ public class VertxCoreRecorder {
                 .setClassPathResolvingEnabled(conf.classpathResolving));
         options.setWorkerPoolSize(conf.workerPoolSize);
         options.setInternalBlockingPoolSize(conf.internalBlockingPoolSize);
+        blockingThreadPoolSize = conf.internalBlockingPoolSize;
 
         options.setBlockedThreadCheckInterval(conf.warningExceptionTime.toMillis());
         if (conf.eventLoopsPoolSize.isPresent()) {
@@ -235,54 +331,14 @@ public class VertxCoreRecorder {
         opts.setTrustAll(eb.trustAll);
 
         // Certificates and trust.
-        if (eb.keyCertificatePem != null) {
-            List<String> certs = new ArrayList<>();
-            List<String> keys = new ArrayList<>();
-            eb.keyCertificatePem.certs.ifPresent(
-                    s -> certs.addAll(COMMA_PATTERN.splitAsStream(s).map(String::trim).collect(Collectors.toList())));
-            eb.keyCertificatePem.keys.ifPresent(
-                    s -> keys.addAll(COMMA_PATTERN.splitAsStream(s).map(String::trim).collect(Collectors.toList())));
-            PemKeyCertOptions o = new PemKeyCertOptions()
-                    .setCertPaths(certs)
-                    .setKeyPaths(keys);
-            opts.setPemKeyCertOptions(o);
-        }
+        configurePemKeyCertOptions(opts, eb.keyCertificatePem);
+        configureJksKeyCertOptions(opts, eb.keyCertificateJks);
+        configurePfxKeyCertOptions(opts, eb.keyCertificatePfx);
 
-        if (eb.keyCertificateJks != null) {
-            JksOptions o = new JksOptions();
-            eb.keyCertificateJks.path.ifPresent(o::setPath);
-            eb.keyCertificateJks.password.ifPresent(o::setPassword);
-            opts.setKeyStoreOptions(o);
-        }
+        configurePemTrustOptions(opts, eb.trustCertificatePem);
+        configureJksKeyCertOptions(opts, eb.trustCertificateJks);
+        configurePfxTrustOptions(opts, eb.trustCertificatePfx);
 
-        if (eb.keyCertificatePfx != null) {
-            PfxOptions o = new PfxOptions();
-            eb.keyCertificatePfx.path.ifPresent(o::setPath);
-            eb.keyCertificatePfx.password.ifPresent(o::setPassword);
-            opts.setPfxKeyCertOptions(o);
-        }
-
-        if (eb.trustCertificatePem != null) {
-            eb.trustCertificatePem.certs.ifPresent(s -> {
-                PemTrustOptions o = new PemTrustOptions();
-                COMMA_PATTERN.splitAsStream(s).map(String::trim).forEach(o::addCertPath);
-                opts.setPemTrustOptions(o);
-            });
-        }
-
-        if (eb.trustCertificateJks != null) {
-            JksOptions o = new JksOptions();
-            eb.trustCertificateJks.path.ifPresent(o::setPath);
-            eb.trustCertificateJks.password.ifPresent(o::setPassword);
-            opts.setTrustStoreOptions(o);
-        }
-
-        if (eb.trustCertificatePfx != null) {
-            PfxOptions o = new PfxOptions();
-            eb.trustCertificatePfx.path.ifPresent(o::setPath);
-            eb.trustCertificatePfx.password.ifPresent(o::setPassword);
-            opts.setPfxTrustOptions(o);
-        }
         options.setEventBusOptions(opts);
     }
 
@@ -290,7 +346,8 @@ public class VertxCoreRecorder {
         return new Supplier<EventLoopGroup>() {
             @Override
             public EventLoopGroup get() {
-                return ((VertxImpl) vertx.get()).getAcceptorEventLoopGroup();
+                vertx.get();
+                return ((VertxImpl) vertx.v).getAcceptorEventLoopGroup();
             }
         };
     }
@@ -321,18 +378,39 @@ public class VertxCoreRecorder {
 
     static class VertxSupplier implements Supplier<Vertx> {
         final VertxConfiguration config;
+        final VertxOptionsCustomizer customizer;
         Vertx v;
 
-        VertxSupplier(VertxConfiguration config) {
+        VertxSupplier(VertxConfiguration config, List<Consumer<VertxOptions>> customizers) {
             this.config = config;
+            this.customizer = new VertxOptionsCustomizer(customizers);
         }
 
         @Override
         public synchronized Vertx get() {
             if (v == null) {
-                v = initialize(config);
+                v = initialize(config, customizer);
             }
             return v;
         }
+    }
+
+    static class VertxOptionsCustomizer {
+        final List<Consumer<VertxOptions>> customizers;
+
+        VertxOptionsCustomizer(List<Consumer<VertxOptions>> customizers) {
+            this.customizers = customizers;
+        }
+
+        VertxOptions customize(VertxOptions options) {
+            for (Consumer<VertxOptions> x : customizers) {
+                x.accept(options);
+            }
+            return options;
+        }
+    }
+
+    public static void setWebDeploymentId(String webDeploymentId) {
+        VertxCoreRecorder.webDeploymentId = webDeploymentId;
     }
 }

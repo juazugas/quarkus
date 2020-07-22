@@ -4,6 +4,7 @@ package io.quarkus.kubernetes.deployment;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
 
 import io.dekorate.kubernetes.annotation.ImagePullPolicy;
 import io.dekorate.kubernetes.annotation.ServiceType;
@@ -33,6 +34,18 @@ public class OpenshiftConfig implements PlatformConfiguration {
     Optional<String> version;
 
     /**
+     * The namespace the generated resources should belong to.
+     * If not value is set, then the 'namespace' field will not be
+     * added to the 'metadata' section of the generated manifests.
+     * This in turn means that when the manifests are applied to a cluster,
+     * the namespace will be resolved from the current Kubernetes context
+     * (see https://kubernetes.io/docs/concepts/configuration/organize-cluster-access-kubeconfig/#context
+     * for more details).
+     */
+    @ConfigItem
+    Optional<String> namespace;
+
+    /**
      * Custom labels to add to all resources
      */
     @ConfigItem
@@ -51,12 +64,6 @@ public class OpenshiftConfig implements PlatformConfiguration {
      */
     @ConfigItem(defaultValue = "true")
     boolean addBuildTimestamp;
-
-    /**
-     * Environment variables to add to all containers
-     */
-    @ConfigItem
-    Map<String, EnvConfig> envVars;
 
     /**
      * Working directory
@@ -97,10 +104,22 @@ public class OpenshiftConfig implements PlatformConfiguration {
     Map<String, PortConfig> ports;
 
     /**
+     * The number of desired pods
+     */
+    @ConfigItem(defaultValue = "1")
+    Integer replicas;
+
+    /**
      * The type of service that will be generated for the application
      */
     @ConfigItem(defaultValue = "ClusterIP")
     ServiceType serviceType;
+
+    /**
+     * The nodePort to set when serviceType is set to nodePort
+     */
+    @ConfigItem
+    OptionalInt nodePort;
 
     /**
      * Image pull policy
@@ -189,7 +208,7 @@ public class OpenshiftConfig implements PlatformConfiguration {
     /**
      * If true, an Openshift Route will be created
      */
-    @ConfigItem(defaultValue = "false")
+    @ConfigItem
     boolean expose;
 
     public Optional<String> getPartOf() {
@@ -204,6 +223,10 @@ public class OpenshiftConfig implements PlatformConfiguration {
         return version;
     }
 
+    public Optional<String> getNamespace() {
+        return namespace;
+    }
+
     public Map<String, String> getLabels() {
         return labels;
     }
@@ -215,10 +238,6 @@ public class OpenshiftConfig implements PlatformConfiguration {
     @Override
     public boolean isAddBuildTimestamp() {
         return addBuildTimestamp;
-    }
-
-    public Map<String, EnvConfig> getEnvVars() {
-        return envVars;
     }
 
     public Optional<String> getWorkingDir() {
@@ -239,6 +258,10 @@ public class OpenshiftConfig implements PlatformConfiguration {
 
     public Optional<String> getHost() {
         return host;
+    }
+
+    public Integer getReplicas() {
+        return replicas;
     }
 
     public Map<String, PortConfig> getPorts() {
@@ -301,12 +324,51 @@ public class OpenshiftConfig implements PlatformConfiguration {
         return initContainers;
     }
 
-    public Map<String, ContainerConfig> getContainers() {
+    public Map<String, ContainerConfig> getSidecars() {
         return containers;
     }
 
     @Override
     public boolean isExpose() {
         return false;
+    }
+
+    @Override
+    public String getTargetPlatformName() {
+        return Constants.OPENSHIFT;
+    }
+
+    /**
+     * Environment variables to add to all containers using the old syntax.
+     *
+     * @deprecated Use {@link #env} instead using the new syntax as follows:
+     *             <ul>
+     *             <li>{@code quarkus.kubernetes.env-vars.foo.field=fieldName} becomes
+     *             {@code quarkus.kubernetes.env.fields.foo=fieldName}</li>
+     *             <li>{@code quarkus.kubernetes.env-vars.envvar.value=value} becomes
+     *             {@code quarkus.kubernetes.env.vars.envvar=value}</li>
+     *             <li>{@code quarkus.kubernetes.env-vars.bar.configmap=configName} becomes
+     *             {@code quarkus.kubernetes.env.configmaps=configName}</li>
+     *             <li>{@code quarkus.kubernetes.env-vars.baz.secret=secretName} becomes
+     *             {@code quarkus.kubernetes.env.secrets=secretName}</li>
+     *             </ul>
+     */
+    @ConfigItem
+    @Deprecated
+    Map<String, EnvConfig> envVars;
+
+    /**
+     * Environment variables to add to all containers.
+     */
+    @ConfigItem
+    EnvVarsConfig env;
+
+    @Deprecated
+    public Map<String, EnvConfig> getEnvVars() {
+        return envVars;
+    }
+
+    public EnvVarsConfig getEnv() {
+        return env;
     }
 }

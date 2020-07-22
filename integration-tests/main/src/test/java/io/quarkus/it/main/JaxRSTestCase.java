@@ -11,6 +11,7 @@ import java.util.zip.GZIPOutputStream;
 import javax.xml.bind.JAXBContext;
 import javax.xml.bind.Marshaller;
 
+import org.eclipse.microprofile.config.ConfigProvider;
 import org.junit.jupiter.api.Test;
 
 import io.quarkus.it.rest.TestResource;
@@ -33,7 +34,8 @@ public class JaxRSTestCase {
 
     @Test
     public void testConfigInjectionOfPort() {
-        RestAssured.when().get("/test/config/host").then().body(is("0.0.0.0"));
+        String host = ConfigProvider.getConfig().getOptionalValue("quarkus.http.host", String.class).orElse("0.0.0.0");
+        RestAssured.when().get("/test/config/host").then().body(is(host));
     }
 
     @Test
@@ -231,10 +233,16 @@ public class JaxRSTestCase {
             sb.append("q");
         }
 
-        RestAssured.given()
-                .body(sb.toString())
-                .post("/test/max-body-size")
-                .then().statusCode(413);
+        try {
+            RestAssured.given()
+                    .body(sb.toString())
+                    .post("/test/max-body-size")
+                    .then().statusCode(413);
+        } catch (Exception ignore) {
+            //because the connection is force closed after sending the 413
+            //sometimes the client can return an IOException if it is still
+            //trying to send the body
+        }
 
         // while sending a payload within the limit should return 200
         RestAssured.given()

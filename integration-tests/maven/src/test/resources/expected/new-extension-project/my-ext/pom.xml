@@ -10,10 +10,17 @@
     <name>My Ext - Parent</name>
 
     <packaging>pom</packaging>
+
     <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+        <maven.compiler.source>1.8</maven.compiler.source>
+        <maven.compiler.target>1.8</maven.compiler.target>
+        <maven.compiler.parameters>true</maven.compiler.parameters>
         <quarkus.version>${project.version}</quarkus.version>
         <compiler-plugin.version>${compiler-plugin.version}</compiler-plugin.version>
     </properties>
+
     <modules>
         <module>deployment</module>
         <module>runtime</module>
@@ -22,7 +29,7 @@
         <dependencies>
             <dependency>
                 <groupId>io.quarkus</groupId>
-                <artifactId>quarkus-bom-deployment</artifactId>
+                <artifactId>quarkus-bom</artifactId>
                 <version>${quarkus.version}</version>
                 <type>pom</type>
                 <scope>import</scope>

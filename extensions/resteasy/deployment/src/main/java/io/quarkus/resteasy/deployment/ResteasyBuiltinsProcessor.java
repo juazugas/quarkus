@@ -3,15 +3,16 @@ package io.quarkus.resteasy.deployment;
 import static io.quarkus.deployment.annotations.ExecutionTime.STATIC_INIT;
 import static io.quarkus.resteasy.deployment.SecurityTransformerUtils.hasSecurityAnnotation;
 
-import java.util.HashSet;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.jboss.jandex.ClassInfo;
 import org.jboss.jandex.DotName;
 
+import io.quarkus.arc.deployment.AdditionalBeanBuildItem;
 import io.quarkus.deployment.Capabilities;
+import io.quarkus.deployment.Capability;
 import io.quarkus.deployment.IsDevelopment;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
@@ -20,10 +21,12 @@ import io.quarkus.deployment.builditem.ApplicationArchivesBuildItem;
 import io.quarkus.deployment.builditem.CapabilityBuildItem;
 import io.quarkus.deployment.builditem.CombinedIndexBuildItem;
 import io.quarkus.resteasy.common.spi.ResteasyJaxrsProviderBuildItem;
+import io.quarkus.resteasy.runtime.AuthenticationFailedExceptionMapper;
 import io.quarkus.resteasy.runtime.ExceptionMapperRecorder;
 import io.quarkus.resteasy.runtime.ForbiddenExceptionMapper;
 import io.quarkus.resteasy.runtime.JaxRsSecurityConfig;
 import io.quarkus.resteasy.runtime.NotFoundExceptionMapper;
+import io.quarkus.resteasy.runtime.SecurityContextFilter;
 import io.quarkus.resteasy.runtime.UnauthorizedExceptionMapper;
 import io.quarkus.resteasy.server.common.deployment.ResteasyDeploymentBuildItem;
 import io.quarkus.security.spi.AdditionalSecuredClassesBuildIem;
@@ -36,7 +39,7 @@ public class ResteasyBuiltinsProcessor {
 
     @BuildStep
     CapabilityBuildItem capability() {
-        return new CapabilityBuildItem(Capabilities.RESTEASY);
+        return new CapabilityBuildItem(Capability.RESTEASY);
     }
 
     @BuildStep
@@ -45,7 +48,7 @@ public class ResteasyBuiltinsProcessor {
             ResteasyDeploymentBuildItem resteasyDeployment,
             BuildProducer<AdditionalSecuredClassesBuildIem> additionalSecuredClasses) {
         if (config.denyJaxRs) {
-            Set<ClassInfo> classes = new HashSet<>();
+            final List<ClassInfo> classes = new ArrayList<>();
 
             List<String> resourceClasses = resteasyDeployment.getDeployment().getScannedResourceClasses();
             for (String className : resourceClasses) {
@@ -63,9 +66,15 @@ public class ResteasyBuiltinsProcessor {
      * Install the JAX-RS security provider.
      */
     @BuildStep
-    void setUpSecurityExceptionMappers(BuildProducer<ResteasyJaxrsProviderBuildItem> providers) {
+    void setUpSecurity(BuildProducer<ResteasyJaxrsProviderBuildItem> providers,
+            BuildProducer<AdditionalBeanBuildItem> additionalBeanBuildItem, Capabilities capabilities) {
         providers.produce(new ResteasyJaxrsProviderBuildItem(UnauthorizedExceptionMapper.class.getName()));
         providers.produce(new ResteasyJaxrsProviderBuildItem(ForbiddenExceptionMapper.class.getName()));
+        providers.produce(new ResteasyJaxrsProviderBuildItem(AuthenticationFailedExceptionMapper.class.getName()));
+        if (capabilities.isPresent(Capability.SECURITY)) {
+            providers.produce(new ResteasyJaxrsProviderBuildItem(SecurityContextFilter.class.getName()));
+            additionalBeanBuildItem.produce(AdditionalBeanBuildItem.unremovableOf(SecurityContextFilter.class));
+        }
     }
 
     @Record(STATIC_INIT)
@@ -81,7 +90,9 @@ public class ResteasyBuiltinsProcessor {
     void addStaticResourcesExceptionMapper(ApplicationArchivesBuildItem applicationArchivesBuildItem,
             ExceptionMapperRecorder recorder) {
         recorder.setStaticResourceRoots(applicationArchivesBuildItem.getAllApplicationArchives().stream()
-                .map(i -> i.getArchiveRoot().resolve(META_INF_RESOURCES).toAbsolutePath().toString())
+                .map(i -> i.getChildPath(META_INF_RESOURCES))
+                .filter(p -> p != null)
+                .map(p -> p.toAbsolutePath().toString())
                 .collect(Collectors.toSet()));
     }
 

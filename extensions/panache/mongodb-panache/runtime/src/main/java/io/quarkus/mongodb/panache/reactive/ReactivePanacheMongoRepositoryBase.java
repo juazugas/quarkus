@@ -7,7 +7,9 @@ import java.util.stream.Stream;
 
 import org.bson.Document;
 
+import io.quarkus.mongodb.panache.PanacheUpdate;
 import io.quarkus.mongodb.panache.reactive.runtime.ReactiveMongoOperations;
+import io.quarkus.mongodb.panache.runtime.MongoOperations;
 import io.quarkus.mongodb.reactive.ReactiveMongoCollection;
 import io.quarkus.mongodb.reactive.ReactiveMongoDatabase;
 import io.quarkus.panache.common.Parameters;
@@ -214,11 +216,11 @@ public interface ReactivePanacheMongoRepositoryBase<Entity, Id> {
      *
      * @param query a {@link Document} query
      * @return a new {@link ReactivePanacheQuery} instance for the given query
-     * @see #find(String, Parameters)
-     * @see #find(String, Sort, Map)
-     * @see #find(String, Sort, Parameters)
-     * @see #list(String, Sort, Parameters)
-     * @see #stream(String, Sort, Parameters)
+     * @see #find(Document, Document)
+     * @see #list(Document)
+     * @see #list(Document, Document)
+     * @see #stream(Document)
+     * @see #stream(Document, Document)
      */
     @GenerateBridge
     public default ReactivePanacheQuery<Entity> find(Document query) {
@@ -231,11 +233,11 @@ public interface ReactivePanacheMongoRepositoryBase<Entity, Id> {
      * @param query a {@link Document} query
      * @param sort the {@link Document} sort
      * @return a new {@link ReactivePanacheQuery} instance for the given query
-     * @see #find(String, Parameters)
-     * @see #find(String, Sort, Map)
-     * @see #find(String, Sort, Parameters)
-     * @see #list(String, Sort, Parameters)
-     * @see #stream(String, Sort, Parameters)
+     * @see #find(Document)
+     * @see #list(Document)
+     * @see #list(Document, Document)
+     * @see #stream(Document)
+     * @see #stream(Document, Document)
      */
     @GenerateBridge
     public default ReactivePanacheQuery<Entity> find(Document query, Document sort) {
@@ -385,15 +387,15 @@ public interface ReactivePanacheMongoRepositoryBase<Entity, Id> {
      * This method is a shortcut for <code>find(query).list()</code>.
      *
      * @param query a {@link Document} query
-     * @return a new {@link ReactivePanacheQuery} instance for the given query
-     * @see #find(String, Parameters)
-     * @see #find(String, Sort, Map)
-     * @see #find(String, Sort, Parameters)
-     * @see #list(String, Sort, Parameters)
-     * @see #stream(String, Sort, Parameters)
+     * @return a {@link List} containing all results, without paging
+     * @see #find(Document)
+     * @see #find(Document, Document)
+     * @see #list(Document, Document)
+     * @see #stream(Document)
+     * @see #stream(Document, Document)
      */
     @GenerateBridge
-    public default ReactivePanacheQuery<Entity> list(Document query) {
+    public default Uni<List<Entity>> list(Document query) {
         throw ReactiveMongoOperations.implementationInjectionMissing();
     }
 
@@ -403,15 +405,15 @@ public interface ReactivePanacheMongoRepositoryBase<Entity, Id> {
      *
      * @param query a {@link Document} query
      * @param sort the {@link Document} sort
-     * @return a new {@link ReactivePanacheQuery} instance for the given query
-     * @see #find(String, Parameters)
-     * @see #find(String, Sort, Map)
-     * @see #find(String, Sort, Parameters)
-     * @see #list(String, Sort, Parameters)
-     * @see #stream(String, Sort, Parameters)
+     * @return a {@link List} containing all results, without paging
+     * @see #find(Document)
+     * @see #find(Document, Document)
+     * @see #list(Document)
+     * @see #stream(Document)
+     * @see #stream(Document, Document)
      */
     @GenerateBridge
-    public default ReactivePanacheQuery<Entity> list(Document query, Document sort) {
+    public default Uni<List<Entity>> list(Document query, Document sort) {
         throw ReactiveMongoOperations.implementationInjectionMissing();
     }
 
@@ -450,7 +452,7 @@ public interface ReactivePanacheMongoRepositoryBase<Entity, Id> {
      *
      * @param query a {@link io.quarkus.mongodb.panache query string}
      * @param params optional sequence of indexed parameters
-     * @return a {@link Stream} containing all results, without paging
+     * @return a {@link Multi} containing all results, without paging
      * @see #stream(String, Sort, Object...)
      * @see #stream(String, Map)
      * @see #stream(String, Parameters)
@@ -469,7 +471,7 @@ public interface ReactivePanacheMongoRepositoryBase<Entity, Id> {
      * @param query a {@link io.quarkus.mongodb.panache query string}
      * @param sort the sort strategy to use
      * @param params optional sequence of indexed parameters
-     * @return a {@link Stream} containing all results, without paging
+     * @return a {@link Multi} containing all results, without paging
      * @see #stream(String, Object...)
      * @see #stream(String, Sort, Map)
      * @see #stream(String, Sort, Parameters)
@@ -487,7 +489,7 @@ public interface ReactivePanacheMongoRepositoryBase<Entity, Id> {
      *
      * @param query a {@link io.quarkus.mongodb.panache query string}
      * @param params {@link Map} of named parameters
-     * @return a {@link Stream} containing all results, without paging
+     * @return a {@link Multi} containing all results, without paging
      * @see #stream(String, Sort, Map)
      * @see #stream(String, Object...)
      * @see #stream(String, Parameters)
@@ -506,7 +508,7 @@ public interface ReactivePanacheMongoRepositoryBase<Entity, Id> {
      * @param query a {@link io.quarkus.mongodb.panache query string}
      * @param sort the sort strategy to use
      * @param params {@link Map} of indexed parameters
-     * @return a {@link Stream} containing all results, without paging
+     * @return a {@link Multi} containing all results, without paging
      * @see #stream(String, Map)
      * @see #stream(String, Sort, Object...)
      * @see #stream(String, Sort, Parameters)
@@ -524,7 +526,7 @@ public interface ReactivePanacheMongoRepositoryBase<Entity, Id> {
      *
      * @param query a {@link io.quarkus.mongodb.panache query string}
      * @param params {@link Parameters} of named parameters
-     * @return a {@link Stream} containing all results, without paging
+     * @return a {@link Multi} containing all results, without paging
      * @see #stream(String, Sort, Parameters)
      * @see #stream(String, Object...)
      * @see #stream(String, Map)
@@ -543,7 +545,7 @@ public interface ReactivePanacheMongoRepositoryBase<Entity, Id> {
      * @param query a {@link io.quarkus.mongodb.panache query string}
      * @param sort the sort strategy to use
      * @param params {@link Parameters} of indexed parameters
-     * @return a {@link Stream} containing all results, without paging
+     * @return a {@link Multi} containing all results, without paging
      * @see #stream(String, Parameters)
      * @see #stream(String, Sort, Object...)
      * @see #stream(String, Sort, Map)
@@ -560,12 +562,13 @@ public interface ReactivePanacheMongoRepositoryBase<Entity, Id> {
      * This method is a shortcut for <code>find(query).stream()</code>.
      *
      * @param query a {@link Document} query
-     * @return a new {@link ReactivePanacheQuery} instance for the given query
-     * @see #find(String, Parameters)
-     * @see #find(String, Sort, Map)
-     * @see #find(String, Sort, Parameters)
-     * @see #list(String, Sort, Parameters)
-     * @see #stream(String, Sort, Parameters)
+     * @return a {@link Multi} containing all results, without paging
+     * @see #find(Document)
+     * @see #find(Document, Document)
+     * @see #list(Document)
+     * @see #list(Document, Document)
+     * @see #stream(Document)
+     * @see #stream(Document, Document)
      */
     @GenerateBridge
     public default Multi<Entity> stream(Document query) {
@@ -578,12 +581,13 @@ public interface ReactivePanacheMongoRepositoryBase<Entity, Id> {
      *
      * @param query a {@link Document} query
      * @param sort the {@link Document} sort
-     * @return a new {@link ReactivePanacheQuery} instance for the given query
-     * @see #find(String, Parameters)
-     * @see #find(String, Sort, Map)
-     * @see #find(String, Sort, Parameters)
-     * @see #list(String, Sort, Parameters)
-     * @see #stream(String, Sort, Parameters)
+     * @return a {@link Multi} containing all results, without paging
+     * @see #find(Document)
+     * @see #find(Document, Document)
+     * @see #list(Document)
+     * @see #list(Document, Document)
+     * @see #stream(Document)
+     * @see #stream(Document, Document)
      */
     @GenerateBridge
     public default Multi<Entity> stream(Document query, Document sort) {
@@ -594,7 +598,7 @@ public interface ReactivePanacheMongoRepositoryBase<Entity, Id> {
      * Find all entities of this type.
      * This method is a shortcut for <code>findAll().stream()</code>.
      *
-     * @return a {@link Stream} containing all results, without paging
+     * @return a {@link Multi} containing all results, without paging
      * @see #streamAll(Sort)
      * @see #findAll()
      * @see #listAll()
@@ -608,7 +612,7 @@ public interface ReactivePanacheMongoRepositoryBase<Entity, Id> {
      * Find all entities of this type, in the given order.
      * This method is a shortcut for <code>findAll(sort).stream()</code>.
      *
-     * @return a {@link Stream} containing all results, without paging
+     * @return a {@link Multi} containing all results, without paging
      * @see #streamAll()
      * @see #findAll(Sort)
      * @see #listAll(Sort)
@@ -701,6 +705,17 @@ public interface ReactivePanacheMongoRepositoryBase<Entity, Id> {
     @GenerateBridge
     public default Uni<Long> deleteAll() {
         throw ReactiveMongoOperations.implementationInjectionMissing();
+    }
+
+    /**
+     * Delete an entity of this type by ID.
+     *
+     * @param id the ID of the entity to delete.
+     * @return false if the entity was not deleted (not found).
+     */
+    @GenerateBridge
+    public default Uni<Boolean> deleteById(Id id) {
+        throw MongoOperations.implementationInjectionMissing();
     }
 
     /**
@@ -869,6 +884,55 @@ public interface ReactivePanacheMongoRepositoryBase<Entity, Id> {
     public default Uni<Void> persistOrUpdate(Entity firstEntity,
             @SuppressWarnings("unchecked") Entity... entities) {
         return ReactiveMongoOperations.persistOrUpdate(firstEntity, entities);
+    }
+
+    /**
+     * Update all entities of this type by the given update document, with optional indexed parameters.
+     * The returned {@link PanacheUpdate} object will allow to restrict on which document the update should be applied.
+     *
+     * @param update the update document, if it didn't contain <code>$set</code> we add it.
+     *        It can also be expressed as a {@link io.quarkus.mongodb.panache query string}.
+     * @param params optional sequence of indexed parameters
+     * @return a new {@link ReactivePanacheUpdate} instance for the given update document
+     * @see #update(String, Map)
+     * @see #update(String, Parameters)
+     */
+    @GenerateBridge
+    public default ReactivePanacheUpdate update(String update, Object... params) {
+        throw ReactiveMongoOperations.implementationInjectionMissing();
+    }
+
+    /**
+     * Update all entities of this type by the given update document, with named parameters.
+     * The returned {@link PanacheUpdate} object will allow to restrict on which document the update should be applied.
+     *
+     * @param update the update document, if it didn't contain <code>$set</code> we add it.
+     *        It can also be expressed as a {@link io.quarkus.mongodb.panache query string}.
+     * @param params {@link Map} of named parameters
+     * @return a new {@link ReactivePanacheUpdate} instance for the given update document
+     * @see #update(String, Object...)
+     * @see #update(String, Parameters)
+     *
+     */
+    @GenerateBridge
+    public default ReactivePanacheUpdate update(String update, Map<String, Object> params) {
+        throw ReactiveMongoOperations.implementationInjectionMissing();
+    }
+
+    /**
+     * Update all entities of this type by the given update document, with named parameters.
+     * The returned {@link PanacheUpdate} object will allow to restrict on which document the update should be applied.
+     *
+     * @param update the update document, if it didn't contain <code>$set</code> we add it.
+     *        It can also be expressed as a {@link io.quarkus.mongodb.panache query string}.
+     * @param params {@link Parameters} of named parameters
+     * @return a new {@link ReactivePanacheUpdate} instance for the given update document
+     * @see #update(String, Object...)
+     * @see #update(String, Map)
+     */
+    @GenerateBridge
+    public default ReactivePanacheUpdate update(String update, Parameters params) {
+        throw ReactiveMongoOperations.implementationInjectionMissing();
     }
 
     /**

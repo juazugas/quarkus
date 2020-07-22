@@ -6,6 +6,7 @@ import java.util.Optional;
 import java.util.stream.Stream;
 
 import javax.json.bind.annotation.JsonbTransient;
+import javax.persistence.EntityManager;
 import javax.persistence.LockModeType;
 import javax.persistence.Transient;
 
@@ -30,6 +31,18 @@ import io.quarkus.panache.common.impl.GenerateBridge;
 public abstract class PanacheEntityBase {
 
     // Operations
+
+    /**
+     * Returns the default {@link EntityManager} for extra operations (eg. CriteriaQueries)
+     *
+     * @return the default {@link EntityManager}
+     */
+    @JsonbTransient
+    // @JsonIgnore is here to avoid serialization of this property with jackson
+    @JsonIgnore
+    public EntityManager getEntityManager() {
+        return JpaOperations.getEntityManager();
+    }
 
     /**
      * Persist this entity in the database, if not already persisted. This will set your ID field if it is not already set.
@@ -639,6 +652,17 @@ public abstract class PanacheEntityBase {
     }
 
     /**
+     * Delete an entity of this type by ID.
+     *
+     * @param id the ID of the entity to delete.
+     * @return false if the entity was not deleted (not found).
+     */
+    @GenerateBridge
+    public static boolean deleteById(Object id) {
+        throw JpaOperations.implementationInjectionMissing();
+    }
+
+    /**
      * Delete all entities of this type matching the given query, with optional indexed parameters.
      *
      * @param query a {@link io.quarkus.hibernate.orm.panache query string}
@@ -720,7 +744,7 @@ public abstract class PanacheEntityBase {
     }
 
     /**
-     * Update all entities of this type matching the given query, with mandatory indexed parameters.
+     * Update all entities of this type matching the given query, with optional indexed parameters.
      *
      * @param query a {@link io.quarkus.hibernate.orm.panache query string}
      * @param params optional sequence of indexed parameters

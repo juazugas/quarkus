@@ -1,6 +1,7 @@
 package io.quarkus.resteasy.common.deployment;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -16,6 +17,8 @@ import javax.ws.rs.ext.Provider;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.jandex.DotName;
+
+import io.quarkus.deployment.builditem.nativeimage.ReflectiveHierarchyBuildItem;
 
 public final class ResteasyDotNames {
 
@@ -52,19 +55,22 @@ public final class ResteasyDotNames {
     public static final DotName CDI_INSTANCE = DotName
             .createSimple(javax.enterprise.inject.Instance.class.getName());
 
+    public static final List<DotName> JAXRS_METHOD_ANNOTATIONS = Collections
+            .unmodifiableList(Arrays.asList(GET, POST, HEAD, DELETE, PUT, PATCH, OPTIONS));
+
     public static final IgnoreForReflectionPredicate IGNORE_FOR_REFLECTION_PREDICATE = new IgnoreForReflectionPredicate();
 
     private static class IgnoreForReflectionPredicate implements Predicate<DotName> {
 
         @Override
-        public boolean test(DotName name) {
-            return ResteasyDotNames.TYPES_IGNORED_FOR_REFLECTION.contains(name) ||
-                    isInIgnoredPackage(name.toString());
-        }
-
-        private boolean isInIgnoredPackage(String name) {
-            for (String containerPackageName : PACKAGES_IGNORED_FOR_REFLECTION) {
-                if (name.startsWith(containerPackageName)) {
+        public boolean test(DotName dotName) {
+            if (ResteasyDotNames.TYPES_IGNORED_FOR_REFLECTION.contains(dotName)
+                    || ReflectiveHierarchyBuildItem.DefaultIgnorePredicate.INSTANCE.test(dotName)) {
+                return true;
+            }
+            String name = dotName.toString();
+            for (String packageName : PACKAGES_IGNORED_FOR_REFLECTION) {
+                if (name.startsWith(packageName)) {
                     return true;
                 }
             }
@@ -74,10 +80,6 @@ public final class ResteasyDotNames {
 
     // Types ignored for reflection used by the RESTEasy and SmallRye REST client extensions.
     private static final Set<DotName> TYPES_IGNORED_FOR_REFLECTION = new HashSet<>(Arrays.asList(
-            // javax.json
-            DotName.createSimple("javax.json.JsonObject"),
-            DotName.createSimple("javax.json.JsonArray"),
-
             // Jackson
             DotName.createSimple("com.fasterxml.jackson.databind.JsonNode"),
 
@@ -98,6 +100,7 @@ public final class ResteasyDotNames {
             DotName.createSimple("io.vertx.core.json.JsonArray"),
             DotName.createSimple("io.vertx.core.json.JsonObject")));
 
-    private static final List<String> PACKAGES_IGNORED_FOR_REFLECTION = Arrays.asList("java.", "io.reactivex.",
-            "org.reactivestreams.");
+    private static final String[] PACKAGES_IGNORED_FOR_REFLECTION = {
+            "javax.json."
+    };
 }

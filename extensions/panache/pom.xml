@@ -15,9 +15,14 @@
     <packaging>pom</packaging>
     <modules>
         <module>panache-common</module>
+        <module>panache-mock</module>
+        <module>hibernate-orm-panache-common</module>
         <module>hibernate-orm-panache</module>
+        <module>hibernate-orm-panache-kotlin</module>
         <module>mongodb-panache</module>
         <module>panacheql</module>
+        <module>rest-data-panache</module>
+        <module>hibernate-orm-rest-data-panache</module>
     </modules>
 
 

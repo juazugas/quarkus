@@ -16,6 +16,12 @@ import java.util.jar.Manifest;
 public interface ClassPathElement extends Closeable {
 
     /**
+     *
+     * @return The element root, or null if not applicable
+     */
+    Path getRoot();
+
+    /**
      * Loads a resource from the class path element, or null if it does not exist.
      *
      * @param name The resource to load
@@ -42,14 +48,15 @@ public interface ClassPathElement extends Closeable {
      * Creates an element from a file system path
      */
     static ClassPathElement fromPath(Path path) {
-        if (Files.isDirectory(path)) {
-            return new DirectoryClassPathElement(path);
-        } else {
-            return new JarClassPathElement(path);
-        }
+        return Files.isDirectory(path) ? new DirectoryClassPathElement(path) : new JarClassPathElement(path);
     }
 
     static ClassPathElement EMPTY = new ClassPathElement() {
+        @Override
+        public Path getRoot() {
+            return null;
+        }
+
         @Override
         public ClassPathResource getResource(String name) {
             return null;

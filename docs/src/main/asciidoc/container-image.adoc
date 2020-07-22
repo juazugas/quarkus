@@ -9,14 +9,14 @@ include::./attributes.adoc[]
 
 Quarkus provides extensions for building (and pushing) container images. Currently it supports:
 
-- <<#jib,JIB>>
+- <<#jib,Jib>>
 - <<#docker,Docker>>
 - <<#s2i,S2I>>
 
 == Container Image extensions
 
 [#jib]
-=== JIB
+=== Jib
 
 The extension `quarkus-container-image-jib` is powered by https://github.com/GoogleContainerTools/jib[Jib] for performing container image builds.
 The major benefit of using Jib with Quarkus is that all the dependencies (everything found under `target/lib`) are cached in a different layer than the actual application making rebuilds really fast and small (when it comes to pushing).
@@ -33,6 +33,13 @@ To use this feature, add the following extension to your project:
 NOTE: In situations where all that is needed to build a container image and no push to a registry is necessary (essentially by having set `quarkus.container-image.build=true` and left `quarkus.container-image.push` unset - it defaults to `false`), then this extension creates a container image and registers
 it with the Docker daemon. This means that although Docker isn't used to build the image, it is nevertheless necessary. Also note that using this mode, the built container image *will*
 show up when executing `docker images`.
+
+==== Including extra files
+
+There are cases when additional files (other than ones produced by the Quarkus build) need to be added to a container image.
+To support these cases, Quarkus copies any file under `src/main/jib` into the built container image (which is essentially the same
+idea that the Jib Maven and Gradle plugins support).
+For example, the presence of `src/main/jib/foo/bar` would result in  `/foo/bar` being added into the container filesystem.
 
 [#docker]
 === Docker
@@ -52,7 +59,7 @@ To use this feature, add the following extension to your project.
 The extension `quarkus-container-image-s2i` is using S2I binary builds in order to perform container builds inside the OpenShift cluster.
 The idea behind the binary build is that you just upload the artifact and its dependencies to the cluster and during the build they will be merged to a builder image (defaults to `fabric8/s2i-java`).
 
-The benefit of this approach, is that it can be combined with OpenShift's `DeploymentConfig` that makes it easy to rollout changes to the cluster.
+The benefit of this approach, is that it can be combined with OpenShift's `DeploymentConfig` that makes it easy to roll out changes to the cluster.
 
 To use this feature, add the following extension to your project.
 
@@ -75,7 +82,7 @@ To build a container image for your project, `quarkus.container-image.build=true
 
 == Pushing
 
-To build a container image for your project, `quarkus.container-image.push=true` needs to be set using any of the ways that Quarkus supports.
+To push a container image for your project, `quarkus.container-image.push=true` needs to be set using any of the ways that Quarkus supports.
 
 [source, subs=attributes+]
 ----
@@ -83,6 +90,17 @@ To build a container image for your project, `quarkus.container-image.push=true`
 ----
 
 NOTE: If no registry is set (using `quarkus.container-image.registry`) then `docker.io` will be used as the default.
+
+== Selecting among multiple extensions
+
+It does not make sense to use multiple extension as part of the same build. When multiple container image extensions are present, an error will be raised to inform the user. The user can either remove the uneeded extensions or select one using `application.properties`.
+
+For example, if both `container-image-docker` and `container-image-s2i` are present and the user needs to use `container-image-docker`:
+
+[source]
+----
+quarkus.container-image.builder=docker
+----
 
 == Customizing
 
@@ -92,7 +110,7 @@ The following properties can be used to customize the container image build proc
 
 include::{generated-dir}/config/quarkus-container-image.adoc[opts=optional, leveloffset=+1]
 
-=== JIB Options
+=== Jib Options
 
 In addition to the generic container image options, the `container-image-jib` also provides the following options:
 

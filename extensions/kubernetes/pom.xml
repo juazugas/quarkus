@@ -16,6 +16,7 @@
     <modules>
         <module>vanilla</module>
         <module>openshift</module>
+        <module>minikube</module>
         <module>spi</module>
     </modules>
 </project>

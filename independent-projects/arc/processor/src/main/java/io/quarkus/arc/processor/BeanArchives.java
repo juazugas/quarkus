@@ -23,6 +23,7 @@ import javax.enterprise.context.control.ActivateRequestContext;
 import javax.enterprise.inject.Any;
 import javax.enterprise.inject.Default;
 import javax.enterprise.inject.Intercepted;
+import javax.enterprise.inject.Model;
 import javax.inject.Named;
 import org.jboss.jandex.AnnotationInstance;
 import org.jboss.jandex.ClassInfo;
@@ -43,11 +44,12 @@ public final class BeanArchives {
      * @param applicationIndexes
      * @return the final bean archive index
      */
-    public static IndexView buildBeanArchiveIndex(ClassLoader deploymentClassLoader, IndexView... applicationIndexes) {
+    public static IndexView buildBeanArchiveIndex(ClassLoader deploymentClassLoader, PersistentClassIndex persistentClassIndex,
+            IndexView... applicationIndexes) {
         List<IndexView> indexes = new ArrayList<>();
         Collections.addAll(indexes, applicationIndexes);
         indexes.add(buildAdditionalIndex());
-        return new IndexWrapper(CompositeIndex.create(indexes), deploymentClassLoader);
+        return new IndexWrapper(CompositeIndex.create(indexes), deploymentClassLoader, persistentClassIndex);
     }
 
     private static IndexView buildAdditionalIndex() {
@@ -61,6 +63,7 @@ public final class BeanArchives {
         index(indexer, BeforeDestroyed.class.getName());
         index(indexer, Destroyed.class.getName());
         index(indexer, Intercepted.class.getName());
+        index(indexer, Model.class.getName());
         // Arc built-in beans
         index(indexer, ActivateRequestContextInterceptor.class.getName());
         index(indexer, InjectableRequestContextController.class.getName());
@@ -72,15 +75,14 @@ public final class BeanArchives {
      */
     static class IndexWrapper implements IndexView {
 
-        private final Map<DotName, Optional<ClassInfo>> additionalClasses;
-
         private final IndexView index;
         private final ClassLoader deploymentClassLoader;
+        final Map<DotName, Optional<ClassInfo>> additionalClasses;
 
-        public IndexWrapper(IndexView index, ClassLoader deploymentClassLoader) {
+        public IndexWrapper(IndexView index, ClassLoader deploymentClassLoader, PersistentClassIndex persistentClassIndex) {
             this.index = index;
             this.deploymentClassLoader = deploymentClassLoader;
-            this.additionalClasses = new ConcurrentHashMap<>();
+            this.additionalClasses = persistentClassIndex.additionalClasses;
         }
 
         @Override
@@ -176,6 +178,11 @@ public final class BeanArchives {
             return index.getAnnotations(annotationName);
         }
 
+        @Override
+        public Collection<AnnotationInstance> getAnnotationsWithRepeatable(DotName annotationName, IndexView index) {
+            return this.index.getAnnotationsWithRepeatable(annotationName, index);
+        }
+
         private void getAllKnownSubClasses(DotName className, Set<ClassInfo> allKnown, Set<DotName> processedClasses) {
             final Set<DotName> subClassesToProcess = new HashSet<DotName>();
             subClassesToProcess.add(className);
@@ -242,14 +249,24 @@ public final class BeanArchives {
     }
 
     static boolean index(Indexer indexer, String className, ClassLoader classLoader) {
+        boolean result = false;
         try (InputStream stream = classLoader
                 .getResourceAsStream(className.replace('.', '/') + ".class")) {
-            indexer.index(stream);
-            return true;
+            if (stream != null) {
+                indexer.index(stream);
+                result = true;
+            } else {
+                LOGGER.warnf("Failed to index %s: Class does not exist in ClassLoader %s", className, classLoader);
+            }
         } catch (IOException e) {
-            LOGGER.warnf("Failed to index %s: %s", className, e.getMessage());
-            return false;
+            LOGGER.warnf(e, "Failed to index %s: %s", className, e.getMessage());
         }
+        return result;
+    }
+
+    public static class PersistentClassIndex {
+
+        final Map<DotName, Optional<ClassInfo>> additionalClasses = new ConcurrentHashMap<>();
     }
 
 }

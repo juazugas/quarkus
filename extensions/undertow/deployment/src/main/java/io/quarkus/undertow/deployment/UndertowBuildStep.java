@@ -14,6 +14,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
@@ -80,6 +81,8 @@ import io.quarkus.arc.deployment.ContextRegistrarBuildItem;
 import io.quarkus.arc.deployment.SyntheticBeanBuildItem;
 import io.quarkus.arc.processor.ContextRegistrar;
 import io.quarkus.deployment.Capabilities;
+import io.quarkus.deployment.Capability;
+import io.quarkus.deployment.Feature;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.Record;
@@ -139,12 +142,12 @@ public class UndertowBuildStep {
 
     @BuildStep
     CapabilityBuildItem capability() {
-        return new CapabilityBuildItem(Capabilities.SERVLET);
+        return new CapabilityBuildItem(Capability.SERVLET);
     }
 
     @BuildStep
     public FeatureBuildItem setupCapability() {
-        return new FeatureBuildItem(FeatureBuildItem.SERVLET);
+        return new FeatureBuildItem(Feature.SERVLET);
     }
 
     @BuildStep
@@ -160,7 +163,7 @@ public class UndertowBuildStep {
             ServletContextPathBuildItem servletContextPathBuildItem,
             Capabilities capabilities) throws Exception {
 
-        if (capabilities.isCapabilityPresent(Capabilities.SECURITY)) {
+        if (capabilities.isPresent(Capability.SECURITY)) {
             recorder.setupSecurity(servletDeploymentManagerBuildItem.getDeploymentManager());
         }
         Handler<RoutingContext> ut = recorder.startUndertow(shutdown, executorBuildItem.getExecutorProxy(),
@@ -172,6 +175,7 @@ public class UndertowBuildStep {
             undertowProducer.accept(new DefaultRouteBuildItem(ut));
         } else {
             routeProducer.produce(new RouteBuildItem(servletContextPathBuildItem.getServletContextPath() + "/*", ut, false));
+            routeProducer.produce(new RouteBuildItem(servletContextPathBuildItem.getServletContextPath(), ut, false));
         }
         return new ServiceStartBuildItem("undertow");
     }
@@ -182,7 +186,7 @@ public class UndertowBuildStep {
             BuildProducer<ListenerBuildItem> listeners,
             Capabilities capabilities) {
         additionalBeans.produce(new AdditionalBeanBuildItem(ServletProducer.class));
-        if (capabilities.isCapabilityPresent(Capabilities.SECURITY)) {
+        if (capabilities.isPresent(Capability.SECURITY)) {
             additionalBeans.produce(AdditionalBeanBuildItem.unremovableOf(ServletHttpSecurityPolicy.class));
         }
         contextRegistrars.produce(new ContextRegistrarBuildItem(new ContextRegistrar() {
@@ -220,7 +224,7 @@ public class UndertowBuildStep {
      * look for Servlet container initializers
      *
      */
-    @BuildStep(loadsApplicationClasses = true)
+    @BuildStep
     public List<ServletContainerInitializerBuildItem> servletContainerInitializer(
             ApplicationArchivesBuildItem archives,
             CombinedIndexBuildItem combinedIndexBuildItem,
@@ -318,7 +322,7 @@ public class UndertowBuildStep {
                 knownPaths.knownDirectories,
                 launchMode.getLaunchMode(), shutdownContext, contextPath, httpBuildTimeConfig.rootPath,
                 servletConfig.defaultCharset, webMetaData.getRequestCharacterEncoding(),
-                webMetaData.getResponseCharacterEncoding());
+                webMetaData.getResponseCharacterEncoding(), httpBuildTimeConfig.auth.proactive);
 
         if (webMetaData.getContextParams() != null) {
             for (ParamValueMetaData i : webMetaData.getContextParams()) {
@@ -478,19 +482,29 @@ public class UndertowBuildStep {
             if (servlet.getLoadOnStartup() == 0) {
                 reflectiveClasses.accept(new ReflectiveClassBuildItem(false, false, servlet.getServletClass()));
             }
-            recorder.registerServlet(deployment, servlet.getName(), context.classProxy(servletClass),
+            RuntimeValue<ServletInfo> s = recorder.registerServlet(deployment, servlet.getName(),
+                    context.classProxy(servletClass),
                     servlet.isAsyncSupported(), servlet.getLoadOnStartup(), bc.getValue(),
                     servlet.getInstanceFactory());
 
             for (String m : servlet.getMappings()) {
                 recorder.addServletMapping(deployment, servlet.getName(), m);
             }
+            for (Map.Entry<String, String> entry : servlet.getInitParams().entrySet()) {
+                recorder.addServletInitParam(s, entry.getKey(), entry.getValue());
+            }
+            if (servlet.getMultipartConfig() != null) {
+                recorder.setMultipartConfig(s, servlet.getMultipartConfig().getLocation(),
+                        servlet.getMultipartConfig().getMaxFileSize(), servlet.getMultipartConfig().getMaxRequestSize(),
+                        servlet.getMultipartConfig().getFileSizeThreshold());
+            }
         }
 
         for (FilterBuildItem filter : filters) {
             String filterClass = filter.getFilterClass();
             reflectiveClasses.accept(new ReflectiveClassBuildItem(false, false, filterClass));
-            recorder.registerFilter(deployment, filter.getName(), context.classProxy(filterClass), filter.isAsyncSupported(),
+            RuntimeValue<FilterInfo> f = recorder.registerFilter(deployment, filter.getName(), context.classProxy(filterClass),
+                    filter.isAsyncSupported(),
                     bc.getValue(), filter.getInstanceFactory());
             for (FilterBuildItem.FilterMappingInfo m : filter.getMappings()) {
                 if (m.getMappingType() == FilterBuildItem.FilterMappingInfo.MappingType.URL) {
@@ -498,6 +512,9 @@ public class UndertowBuildStep {
                 } else {
                     recorder.addFilterServletNameMapping(deployment, filter.getName(), m.getMapping(), m.getDispatcher());
                 }
+            }
+            for (Map.Entry<String, String> entry : filter.getInitParams().entrySet()) {
+                recorder.addFilterInitParam(f, entry.getKey(), entry.getValue());
             }
         }
         for (ServletInitParamBuildItem i : initParams) {

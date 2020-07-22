@@ -18,7 +18,8 @@ import com.arjuna.common.util.propertyservice.PropertiesFactory;
 import io.quarkus.arc.deployment.AdditionalBeanBuildItem;
 import io.quarkus.arc.deployment.ContextRegistrarBuildItem;
 import io.quarkus.arc.processor.ContextRegistrar;
-import io.quarkus.deployment.Capabilities;
+import io.quarkus.deployment.Capability;
+import io.quarkus.deployment.Feature;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.Record;
@@ -48,7 +49,7 @@ class NarayanaJtaProcessor {
 
     @BuildStep
     CapabilityBuildItem capability() {
-        return new CapabilityBuildItem(Capabilities.TRANSACTIONS);
+        return new CapabilityBuildItem(Capability.TRANSACTIONS);
     }
 
     @BuildStep
@@ -59,7 +60,7 @@ class NarayanaJtaProcessor {
             BuildProducer<RuntimeInitializedClassBuildItem> runtimeInit,
             BuildProducer<FeatureBuildItem> feature,
             TransactionManagerConfiguration transactions) {
-        feature.produce(new FeatureBuildItem(FeatureBuildItem.NARAYANA_JTA));
+        feature.produce(new FeatureBuildItem(Feature.NARAYANA_JTA));
         additionalBeans.produce(new AdditionalBeanBuildItem(NarayanaJtaProducers.class));
         additionalBeans.produce(new AdditionalBeanBuildItem(CDIDelegatingTransactionManager.class));
         runtimeInit.produce(new RuntimeInitializedClassBuildItem(
@@ -83,6 +84,11 @@ class NarayanaJtaProcessor {
 
         //we want to force Arjuna to init at static init time
         Properties defaultProperties = PropertiesFactory.getDefaultProperties();
+        //we don't want to store the system properties here
+        //we re-apply them at runtime
+        for (Object i : System.getProperties().keySet()) {
+            defaultProperties.remove(i);
+        }
         recorder.setDefaultProperties(defaultProperties);
         // This must be done before setNodeName as the code in setNodeName will create a TSM based on the value of this property
         recorder.disableTransactionStatusManager();

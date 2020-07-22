@@ -1,10 +1,10 @@
 package io.quarkus.it.keycloak;
 
+import java.security.BasicPermission;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
+import java.util.function.Function;
 
 import javax.inject.Inject;
 import javax.security.auth.AuthPermission;
@@ -14,12 +14,14 @@ import javax.ws.rs.GET;
 import javax.ws.rs.POST;
 import javax.ws.rs.Path;
 import javax.ws.rs.Produces;
+import javax.ws.rs.QueryParam;
 import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
 
 import org.keycloak.representations.idm.authorization.Permission;
 
 import io.quarkus.security.identity.SecurityIdentity;
+import io.smallrye.mutiny.Uni;
 import io.vertx.core.http.HttpServerRequest;
 
 @Path("/api/permission")
@@ -30,13 +32,37 @@ public class ProtectedResource {
 
     @GET
     @Produces(MediaType.APPLICATION_JSON)
-    public CompletionStage<List<Permission>> permissions() {
-        return identity.checkPermission(new AuthPermission("Permission Resource"))
-                .thenCompose(granted -> {
-                    if (granted) {
-                        return CompletableFuture.completedFuture(identity.getAttribute("permissions"));
+    public Uni<List<Permission>> permissions() {
+        return identity.checkPermission(new AuthPermission("Permission Resource")).onItem()
+                .apply(new Function<Boolean, List<Permission>>() {
+                    @Override
+                    public List<Permission> apply(Boolean granted) {
+                        if (granted) {
+                            return identity.getAttribute("permissions");
+                        }
+                        throw new ForbiddenException();
                     }
-                    throw new ForbiddenException();
+                });
+    }
+
+    @GET
+    @Path("/scope")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Uni<List<Permission>> hasScopePermission(@QueryParam("scope") String scope) {
+        return identity.checkPermission(new BasicPermission("Scope Permission Resource") {
+            @Override
+            public String getActions() {
+                return scope;
+            }
+        }).onItem()
+                .apply(new Function<Boolean, List<Permission>>() {
+                    @Override
+                    public List<Permission> apply(Boolean granted) {
+                        if (granted) {
+                            return identity.getAttribute("permissions");
+                        }
+                        throw new ForbiddenException();
+                    }
                 });
     }
 

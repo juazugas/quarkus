@@ -12,7 +12,7 @@
 
     <artifactId>quarkus-smallrye-opentracing</artifactId>
     <name>Quarkus - SmallRye OpenTracing - Runtime</name>
-    <description>Trace your services with Jaeger</description>
+    <description>Trace your services with SmallRye OpenTracing</description>
     <dependencies>
         <dependency>
             <groupId>org.eclipse.microprofile.config</groupId>
@@ -29,6 +29,16 @@
                 <exclusion>
                     <groupId>javax.inject</groupId>
                     <artifactId>javax.inject</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>io.smallrye</groupId>
+            <artifactId>smallrye-fault-tolerance-tracing-propagation</artifactId>
+            <exclusions>
+                <exclusion>
+                    <groupId>*</groupId>
+                    <artifactId>*</artifactId>
                 </exclusion>
             </exclusions>
         </dependency>

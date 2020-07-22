@@ -3,15 +3,17 @@ package io.quarkus.hibernate.orm.runtime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Set;
 
+import org.hibernate.MultiTenancyStrategy;
 import org.hibernate.boot.archive.scan.spi.Scanner;
 import org.hibernate.integrator.spi.Integrator;
-import org.hibernate.jpa.boot.internal.ParsedPersistenceXmlDescriptor;
-import org.hibernate.service.spi.ServiceContributor;
 import org.jboss.logging.Logger;
 
 import io.quarkus.arc.runtime.BeanContainer;
 import io.quarkus.arc.runtime.BeanContainerListener;
+import io.quarkus.hibernate.orm.runtime.boot.QuarkusPersistenceUnitDefinition;
+import io.quarkus.hibernate.orm.runtime.proxies.PreGeneratedProxies;
 import io.quarkus.runtime.annotations.Recorder;
 
 /**
@@ -22,11 +24,8 @@ public class HibernateOrmRecorder {
 
     private List<String> entities = new ArrayList<>();
 
-    public void addEntity(String entityClass) {
-        entities.add(entityClass);
-    }
-
-    public void enlistPersistenceUnit() {
+    public void enlistPersistenceUnit(Set<String> entityClassNames) {
+        entities.addAll(entityClassNames);
         Logger.getLogger("io.quarkus.hibernate.orm").debugf("List of entities found by Quarkus deployment:%n%s", entities);
     }
 
@@ -39,11 +38,25 @@ public class HibernateOrmRecorder {
         Hibernate.featureInit(enabled);
     }
 
-    public BeanContainerListener initializeJpa(boolean jtaEnabled) {
+    /**
+     * Initializes the JPA configuration to be used at runtime.
+     * 
+     * @param jtaEnabled Should JTA be enabled?
+     * @param strategy Multitenancy strategy to use.
+     * @param multiTenancySchemaDataSource Data source to use in case of {@link MultiTenancyStrategy#SCHEMA} approach or
+     *        {@link null} in case the default data source.
+     * 
+     * @return
+     */
+    public BeanContainerListener initializeJpa(boolean jtaEnabled, MultiTenancyStrategy strategy,
+            String multiTenancySchemaDataSource) {
         return new BeanContainerListener() {
             @Override
             public void created(BeanContainer beanContainer) {
-                beanContainer.instance(JPAConfig.class).setJtaEnabled(jtaEnabled);
+                JPAConfig instance = beanContainer.instance(JPAConfig.class);
+                instance.setJtaEnabled(jtaEnabled);
+                instance.setMultiTenancyStrategy(strategy);
+                instance.setMultiTenancySchemaDataSource(multiTenancySchemaDataSource);
             }
         };
     }
@@ -66,14 +79,14 @@ public class HibernateOrmRecorder {
         };
     }
 
-    public BeanContainerListener initMetadata(List<ParsedPersistenceXmlDescriptor> parsedPersistenceXmlDescriptors,
+    public BeanContainerListener initMetadata(List<QuarkusPersistenceUnitDefinition> parsedPersistenceXmlDescriptors,
             Scanner scanner, Collection<Class<? extends Integrator>> additionalIntegrators,
-            Collection<Class<? extends ServiceContributor>> additionalServiceContributors) {
+            PreGeneratedProxies proxyDefinitions) {
         return new BeanContainerListener() {
             @Override
             public void created(BeanContainer beanContainer) {
                 PersistenceUnitsHolder.initializeJpa(parsedPersistenceXmlDescriptors, scanner, additionalIntegrators,
-                        additionalServiceContributors);
+                        proxyDefinitions);
             }
         };
     }

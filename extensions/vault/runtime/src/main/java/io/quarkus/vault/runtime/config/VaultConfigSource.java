@@ -1,9 +1,10 @@
 package io.quarkus.vault.runtime.config;
 
-import static io.quarkus.vault.CredentialsProvider.PASSWORD_PROPERTY_NAME;
+import static io.quarkus.credentials.CredentialsProvider.PASSWORD_PROPERTY_NAME;
 import static io.quarkus.vault.runtime.LogConfidentialityLevel.MEDIUM;
 import static io.quarkus.vault.runtime.config.VaultCacheEntry.tryReturnLastKnownValue;
 import static io.quarkus.vault.runtime.config.VaultRuntimeConfig.DEFAULT_CONNECT_TIMEOUT;
+import static io.quarkus.vault.runtime.config.VaultRuntimeConfig.DEFAULT_KUBERNETES_AUTH_MOUNT_PATH;
 import static io.quarkus.vault.runtime.config.VaultRuntimeConfig.DEFAULT_KUBERNETES_JWT_TOKEN_PATH;
 import static io.quarkus.vault.runtime.config.VaultRuntimeConfig.DEFAULT_KV_SECRET_ENGINE_MOUNT_PATH;
 import static io.quarkus.vault.runtime.config.VaultRuntimeConfig.DEFAULT_READ_TIMEOUT;
@@ -11,7 +12,7 @@ import static io.quarkus.vault.runtime.config.VaultRuntimeConfig.DEFAULT_RENEW_G
 import static io.quarkus.vault.runtime.config.VaultRuntimeConfig.DEFAULT_SECRET_CONFIG_CACHE_PERIOD;
 import static io.quarkus.vault.runtime.config.VaultRuntimeConfig.DEFAULT_TLS_SKIP_VERIFY;
 import static io.quarkus.vault.runtime.config.VaultRuntimeConfig.DEFAULT_TLS_USE_KUBERNETES_CACERT;
-import static io.quarkus.vault.runtime.config.VaultRuntimeConfig.KV_SECRET_ENGINE_VERSION_V1;
+import static io.quarkus.vault.runtime.config.VaultRuntimeConfig.KV_SECRET_ENGINE_VERSION_V2;
 import static java.lang.Boolean.parseBoolean;
 import static java.lang.Integer.parseInt;
 import static java.util.Collections.emptyMap;
@@ -31,6 +32,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -58,6 +60,8 @@ public class VaultConfigSource implements ConfigSource {
 
     private AtomicReference<VaultCacheEntry<Map<String, String>>> cache = new AtomicReference<>(null);
     private AtomicReference<VaultRuntimeConfig> serverConfig = new AtomicReference<>(null);
+    private AtomicReference<VaultBuildTimeConfig> buildServerConfig = new AtomicReference<>(null);
+
     private AtomicBoolean init = new AtomicBoolean(false);
     private int ordinal;
     private DurationConverter durationConverter = new DurationConverter();
@@ -89,7 +93,7 @@ public class VaultConfigSource implements ConfigSource {
     @Override
     public String getValue(String propertyName) {
 
-        VaultRuntimeConfig serverConfig = getConfig();
+        VaultRuntimeConfig serverConfig = getRuntimeConfig();
 
         if (!serverConfig.url.isPresent()) {
             return null;
@@ -100,7 +104,7 @@ public class VaultConfigSource implements ConfigSource {
 
     private Map<String, String> getSecretConfig() {
 
-        VaultRuntimeConfig serverConfig = getConfig();
+        VaultRuntimeConfig serverConfig = getRuntimeConfig();
 
         VaultCacheEntry<Map<String, String>> cacheEntry = cache.get();
         if (cacheEntry != null && cacheEntry.youngerThan(serverConfig.secretConfigCachePeriod)) {
@@ -148,30 +152,55 @@ public class VaultConfigSource implements ConfigSource {
 
     private VaultManager getVaultManager() {
 
-        VaultRuntimeConfig serverConfig = getConfig();
+        VaultBuildTimeConfig buildTimeConfig = getBuildtimeConfig();
+        VaultRuntimeConfig serverConfig = getRuntimeConfig();
 
         // init at most once
         if (init.compareAndSet(false, true)) {
-            VaultManager.init(serverConfig);
+            VaultManager.init(buildTimeConfig, serverConfig);
         }
 
         return VaultManager.getInstance();
     }
 
-    private VaultRuntimeConfig getConfig() {
-        VaultRuntimeConfig serverConfig = this.serverConfig.get();
-        if (serverConfig != null) {
-            return serverConfig;
+    private VaultRuntimeConfig getRuntimeConfig() {
+        return getConfig(this.serverConfig, () -> loadRuntimeConfig(), "runtime");
+    }
+
+    private VaultBuildTimeConfig getBuildtimeConfig() {
+        return getConfig(this.buildServerConfig, () -> loadBuildtimeConfig(), "buildtime");
+    }
+
+    private <T> T getConfig(AtomicReference<T> ref, Supplier<T> supplier, String name) {
+        T config = ref.get();
+        if (config != null) {
+            return config;
         } else {
-            serverConfig = loadConfig();
-            log.debug("loaded vault server config " + serverConfig);
-            this.serverConfig.set(serverConfig);
-            return this.serverConfig.get();
+            config = supplier.get();
+            log.debug("loaded vault " + name + " config " + config);
+            ref.set(config);
+            return ref.get();
         }
     }
 
     // need to recode config loading since we are at the config source level
-    private VaultRuntimeConfig loadConfig() {
+    private VaultBuildTimeConfig loadBuildtimeConfig() {
+        VaultBuildTimeConfig vaultBuildTimeConfig = new VaultBuildTimeConfig();
+        vaultBuildTimeConfig.health = new HealthConfig();
+
+        vaultBuildTimeConfig.health.enabled = parseBoolean(
+                getVaultProperty("health.enabled", "false"));
+
+        vaultBuildTimeConfig.health.standByOk = parseBoolean(
+                getVaultProperty("health.stand-by-ok", "false"));
+        vaultBuildTimeConfig.health.performanceStandByOk = parseBoolean(
+                getVaultProperty("health.performance-stand-by-ok", "false"));
+
+        return vaultBuildTimeConfig;
+    }
+
+    // need to recode config loading since we are at the config source level
+    private VaultRuntimeConfig loadRuntimeConfig() {
 
         VaultRuntimeConfig serverConfig = new VaultRuntimeConfig();
         serverConfig.tls = new VaultTlsConfig();
@@ -182,20 +211,28 @@ public class VaultConfigSource implements ConfigSource {
         serverConfig.authentication.kubernetes = new VaultKubernetesAuthenticationConfig();
         serverConfig.url = newURL(getOptionalVaultProperty("url"));
         serverConfig.authentication.clientToken = getOptionalVaultProperty("authentication.client-token");
+        serverConfig.authentication.clientTokenWrappingToken = getOptionalVaultProperty(
+                "authentication.client-token-wrapping-token");
         serverConfig.authentication.kubernetes.role = getOptionalVaultProperty("authentication.kubernetes.role");
         serverConfig.authentication.kubernetes.jwtTokenPath = getVaultProperty("authentication.kubernetes.jwt-token-path",
                 DEFAULT_KUBERNETES_JWT_TOKEN_PATH);
+        serverConfig.authentication.kubernetes.authMountPath = getVaultProperty("authentication.kubernetes.auth-mount-path",
+                DEFAULT_KUBERNETES_AUTH_MOUNT_PATH);
         serverConfig.authentication.userpass.username = getOptionalVaultProperty("authentication.userpass.username");
         serverConfig.authentication.userpass.password = getOptionalVaultProperty("authentication.userpass.password");
+        serverConfig.authentication.userpass.passwordWrappingToken = getOptionalVaultProperty(
+                "authentication.userpass.password-wrapping-token");
         serverConfig.authentication.appRole.roleId = getOptionalVaultProperty("authentication.app-role.role-id");
         serverConfig.authentication.appRole.secretId = getOptionalVaultProperty("authentication.app-role.secret-id");
+        serverConfig.authentication.appRole.secretIdWrappingToken = getOptionalVaultProperty(
+                "authentication.app-role.secret-id-wrapping-token");
         serverConfig.renewGracePeriod = getVaultDuration("renew-grace-period", DEFAULT_RENEW_GRACE_PERIOD);
         serverConfig.secretConfigCachePeriod = getVaultDuration("secret-config-cache-period",
                 DEFAULT_SECRET_CONFIG_CACHE_PERIOD);
         serverConfig.logConfidentialityLevel = LogConfidentialityLevel
                 .valueOf(getVaultProperty("log-confidentiality-level", MEDIUM.name()).toUpperCase());
         serverConfig.kvSecretEngineVersion = parseInt(
-                getVaultProperty("kv-secret-engine-version", KV_SECRET_ENGINE_VERSION_V1));
+                getVaultProperty("kv-secret-engine-version", KV_SECRET_ENGINE_VERSION_V2));
         serverConfig.kvSecretEngineMountPath = getVaultProperty("kv-secret-engine-mount-path",
                 DEFAULT_KV_SECRET_ENGINE_MOUNT_PATH);
         serverConfig.secretConfigKvPath = getOptionalListProperty("secret-config-kv-path");

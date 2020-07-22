@@ -2,16 +2,22 @@ package io.quarkus.oidc.deployment;
 
 import java.util.function.BooleanSupplier;
 
+import javax.inject.Singleton;
+
 import org.eclipse.microprofile.jwt.Claim;
 
 import io.quarkus.arc.deployment.AdditionalBeanBuildItem;
-import io.quarkus.arc.deployment.BeanContainerBuildItem;
+import io.quarkus.arc.deployment.SyntheticBeanBuildItem;
 import io.quarkus.deployment.Capabilities;
+import io.quarkus.deployment.Capability;
+import io.quarkus.deployment.Feature;
+import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.ExecutionTime;
 import io.quarkus.deployment.annotations.Record;
 import io.quarkus.deployment.builditem.EnableAllSecurityServicesBuildItem;
 import io.quarkus.deployment.builditem.FeatureBuildItem;
+import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.oidc.runtime.DefaultTenantConfigResolver;
 import io.quarkus.oidc.runtime.OidcAuthenticationMechanism;
 import io.quarkus.oidc.runtime.OidcBuildTimeConfig;
@@ -20,24 +26,25 @@ import io.quarkus.oidc.runtime.OidcIdentityProvider;
 import io.quarkus.oidc.runtime.OidcJsonWebTokenProducer;
 import io.quarkus.oidc.runtime.OidcRecorder;
 import io.quarkus.oidc.runtime.OidcTokenCredentialProducer;
+import io.quarkus.oidc.runtime.TenantConfigBean;
 import io.quarkus.vertx.core.deployment.CoreVertxBuildItem;
 import io.smallrye.jwt.auth.cdi.CommonJwtProducer;
 import io.smallrye.jwt.auth.cdi.JsonValueProducer;
 import io.smallrye.jwt.auth.cdi.RawClaimTypeProducer;
+import io.smallrye.jwt.build.impl.JwtProviderImpl;
 
-@SuppressWarnings("deprecation")
 public class OidcBuildStep {
 
     OidcBuildTimeConfig buildTimeConfig;
 
     @BuildStep(onlyIf = IsEnabled.class)
     FeatureBuildItem featureBuildItem() {
-        return new FeatureBuildItem(FeatureBuildItem.OIDC);
+        return new FeatureBuildItem(Feature.OIDC);
     }
 
     @BuildStep(onlyIf = IsEnabled.class)
     AdditionalBeanBuildItem jwtClaimIntegration(Capabilities capabilities) {
-        if (!capabilities.isCapabilityPresent(Capabilities.JWT)) {
+        if (!capabilities.isPresent(Capability.JWT)) {
             AdditionalBeanBuildItem.Builder removable = AdditionalBeanBuildItem.builder();
             removable.addBeanClass(CommonJwtProducer.class);
             removable.addBeanClass(RawClaimTypeProducer.class);
@@ -49,14 +56,18 @@ public class OidcBuildStep {
     }
 
     @BuildStep(onlyIf = IsEnabled.class)
-    public AdditionalBeanBuildItem beans() {
-        AdditionalBeanBuildItem.Builder beans = AdditionalBeanBuildItem.builder().setUnremovable();
+    public void additionalBeans(BuildProducer<AdditionalBeanBuildItem> additionalBeans,
+            BuildProducer<ReflectiveClassBuildItem> reflectiveClasses) {
+        AdditionalBeanBuildItem.Builder builder = AdditionalBeanBuildItem.builder().setUnremovable();
 
-        return beans.addBeanClass(OidcAuthenticationMechanism.class)
+        builder.addBeanClass(OidcAuthenticationMechanism.class)
                 .addBeanClass(OidcJsonWebTokenProducer.class)
                 .addBeanClass(OidcTokenCredentialProducer.class)
                 .addBeanClass(OidcIdentityProvider.class)
-                .addBeanClass(DefaultTenantConfigResolver.class).build();
+                .addBeanClass(DefaultTenantConfigResolver.class);
+        additionalBeans.produce(builder.build());
+
+        reflectiveClasses.produce(new ReflectiveClassBuildItem(true, true, JwtProviderImpl.class));
     }
 
     @BuildStep(onlyIf = IsEnabled.class)
@@ -66,9 +77,15 @@ public class OidcBuildStep {
 
     @Record(ExecutionTime.RUNTIME_INIT)
     @BuildStep(onlyIf = IsEnabled.class)
-    public void setup(OidcConfig config, OidcRecorder recorder, CoreVertxBuildItem vertxBuildItem,
-            BeanContainerBuildItem bc) {
-        recorder.setup(config, vertxBuildItem.getVertx(), bc.getValue());
+    public SyntheticBeanBuildItem setup(
+            OidcConfig config,
+            OidcRecorder recorder,
+            CoreVertxBuildItem vertxBuildItem) {
+        return SyntheticBeanBuildItem.configure(TenantConfigBean.class).unremovable().types(TenantConfigBean.class)
+                .supplier(recorder.setup(config, vertxBuildItem.getVertx()))
+                .scope(Singleton.class)
+                .setRuntimeInit()
+                .done();
     }
 
     static class IsEnabled implements BooleanSupplier {

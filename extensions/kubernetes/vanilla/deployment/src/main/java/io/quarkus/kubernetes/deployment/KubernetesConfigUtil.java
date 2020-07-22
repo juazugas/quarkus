@@ -9,6 +9,7 @@ import static io.quarkus.kubernetes.deployment.Constants.OPENSHIFT;
 import static io.quarkus.kubernetes.deployment.Constants.S2I;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -33,10 +34,14 @@ public class KubernetesConfigUtil {
     private static final String EXPOSE_PROPERTY_NAME = "expose";
     private static final String[] EXPOSABLE_GENERATORS = { OPENSHIFT, KUBERNETES };
 
-    public static List<String> getDeploymentTargets() {
+    public static List<String> getUserSpecifiedDeploymentTargets() {
         Config config = ConfigProvider.getConfig();
-        return Arrays.stream(config.getOptionalValue(DEPLOYMENT_TARGET, String.class)
-                .orElse(config.getOptionalValue(OLD_DEPLOYMENT_TARGET, String.class).orElse(KUBERNETES))
+        String configValue = config.getOptionalValue(DEPLOYMENT_TARGET, String.class)
+                .orElse(config.getOptionalValue(OLD_DEPLOYMENT_TARGET, String.class).orElse(""));
+        if (configValue.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return Arrays.stream(configValue
                 .split(","))
                 .map(String::trim)
                 .map(String::toLowerCase)
@@ -79,7 +84,7 @@ public class KubernetesConfigUtil {
         }
 
         // hard-coded support for exposed
-        handleExpose(config, unPrefixed);
+        handleExpose(config, unPrefixed, platformConfigurations);
 
         result.putAll(unPrefixed);
         result.putAll(quarkusPrefixed);
@@ -87,7 +92,8 @@ public class KubernetesConfigUtil {
         return result;
     }
 
-    private static void handleExpose(Config config, Map<String, Object> unPrefixed) {
+    private static void handleExpose(Config config, Map<String, Object> unPrefixed,
+            PlatformConfiguration... platformConfigurations) {
         for (String generator : EXPOSABLE_GENERATORS) {
             boolean unprefixedExpose = config.getOptionalValue(generator + "." + EXPOSE_PROPERTY_NAME, Boolean.class)
                     .orElse(false);
@@ -96,6 +102,13 @@ public class KubernetesConfigUtil {
                     .orElse(false);
             if (unprefixedExpose || prefixedExpose) {
                 unPrefixed.put(DEKORATE_PREFIX + generator + "." + EXPOSE_PROPERTY_NAME, true);
+                for (PlatformConfiguration platformConfiguration : platformConfigurations) {
+                    if (platformConfiguration.getConfigName().equals(generator)) {
+                        platformConfiguration.getHost()
+                                .ifPresent(h -> unPrefixed.put(DEKORATE_PREFIX + generator + ".host", h));
+                        break;
+                    }
+                }
             }
         }
     }

@@ -72,6 +72,12 @@ final class Beans {
                 // Qualifiers
                 qualifiers.add(qualifierAnnotation);
             }
+            // Treat the case when an additional bean defining annotation that is also a qualifier declares the default scope
+            StereotypeInfo stereotype = beanDeployment.getStereotype(annotation.name());
+            if (stereotype != null) {
+                stereotypes.add(stereotype);
+                continue;
+            }
             if (!qualifierCollection.isEmpty()) {
                 // we needn't process it further, the annotation was a qualifier (or multiple repeating ones)
                 continue;
@@ -102,11 +108,6 @@ final class Beans {
                 scopes.add(scopeAnnotation);
                 continue;
             }
-            StereotypeInfo stereotype = beanDeployment.getStereotype(annotation.name());
-            if (stereotype != null) {
-                stereotypes.add(stereotype);
-                continue;
-            }
         }
 
         if (scopes.size() > 1) {
@@ -129,14 +130,15 @@ final class Beans {
         if (name == null) {
             name = initStereotypeName(stereotypes, beanClass);
         }
-        if (isAlternative && alternativePriority == null) {
-            alternativePriority = initStereotypeAlternativePriority(stereotypes);
 
-            // after all attempts, priority is still null, bean will be ignored
+        if (isAlternative) {
+            alternativePriority = initAlternativePriority(beanClass, alternativePriority, stereotypes, beanDeployment);
             if (alternativePriority == null) {
-                throw new IllegalStateException("Bean defined via class " + beanClass.name()
-                        + " is declared as an @Alternative, " +
-                        "but has no @Priority. Either declare a @Priority or leverage @io.quarkus.arc.AlernativePriority annotation.");
+                // after all attempts, priority is still null, bean will be ignored
+                LOGGER.infof(
+                        "Ignoring bean defined via %s - declared as an @Alternative but not selected by @Priority, @AlternativePriority or quarkus.arc.selected-alternatives",
+                        beanClass.name());
+                return null;
             }
         }
 
@@ -251,23 +253,19 @@ final class Beans {
         if (name == null) {
             name = initStereotypeName(stereotypes, producerMethod);
         }
-        if (isAlternative && alternativePriority == null) {
-            alternativePriority = declaringBean.getAlternativePriority();
+
+        if (isAlternative) {
             if (alternativePriority == null) {
-                // Declaring bean itself does not have to be an alternative and can only have @Priority
-                alternativePriority = declaringBean.getTarget().get().asClass().classAnnotations().stream()
-                        .filter(a -> a.name().equals(DotNames.PRIORITY)).findAny()
-                        .map(a -> a.value().asInt()).orElse(null);
+                alternativePriority = declaringBean.getAlternativePriority();
             }
-            if (alternativePriority == null) {
-                alternativePriority = initStereotypeAlternativePriority(stereotypes);
-            }
+            alternativePriority = initAlternativePriority(producerMethod, alternativePriority, stereotypes, beanDeployment);
             // after all attempts, priority is still null
             if (alternativePriority == null) {
-                throw new IllegalStateException("Declaring bean " + declaringBean +
-                        " contains a producer method " + producerMethod + " declaring an @Alternative, " +
-                        "but without @Priority. Either make sure @Priority annotation gets inherited, or replace" +
-                        "@Alternative annotation with @io.quarkus.arc.AlternativePriority annotation.");
+                // after all attempts, priority is still null, bean will be ignored
+                LOGGER.infof(
+                        "Ignoring producer method %s - declared as an @Alternative but not selected by @Priority, @AlternativePriority or quarkus.arc.selected-alternatives",
+                        declaringBean.getTarget().get().asClass().name() + "#" + producerMethod.name());
+                return null;
             }
         }
 
@@ -354,23 +352,18 @@ final class Beans {
         if (name == null) {
             name = initStereotypeName(stereotypes, producerField);
         }
-        if (isAlternative && alternativePriority == null) {
-            alternativePriority = declaringBean.getAlternativePriority();
+
+        if (isAlternative) {
             if (alternativePriority == null) {
-                // Declaring bean itself does not have to be an alternative and can only have @Priority
-                alternativePriority = declaringBean.getTarget().get().asClass().classAnnotations().stream()
-                        .filter(a -> a.name().equals(DotNames.PRIORITY)).findAny()
-                        .map(a -> a.value().asInt()).orElse(null);
+                alternativePriority = declaringBean.getAlternativePriority();
             }
-            if (alternativePriority == null) {
-                alternativePriority = initStereotypeAlternativePriority(stereotypes);
-            }
+            alternativePriority = initAlternativePriority(producerField, alternativePriority, stereotypes, beanDeployment);
             // after all attempts, priority is still null
             if (alternativePriority == null) {
-                throw new IllegalStateException("Declaring bean " + declaringBean +
-                        " contains a producer field " + producerField + " declaring an @Alternative, " +
-                        "but without @Priority. Either make sure @Priority annotation gets inherited, or replace " +
-                        "@Alternative annotation with @io.quarkus.arc.AlternativePriority annotation.");
+                LOGGER.debugf(
+                        "Ignoring producer field %s - declared as an @Alternative but not selected by @Priority, @AlternativePriority or quarkus.arc.selected-alternatives",
+                        producerField);
+                return null;
 
             }
         }
@@ -566,10 +559,25 @@ final class Beans {
 
     private static int compareAlternativeBeans(BeanInfo bean1, BeanInfo bean2) {
         // The highest priority wins
-        Integer priority2 = bean2.getDeclaringBean() != null ? bean2.getDeclaringBean().getAlternativePriority()
-                : bean2.getAlternativePriority();
-        Integer priority1 = bean1.getDeclaringBean() != null ? bean1.getDeclaringBean().getAlternativePriority()
-                : bean1.getAlternativePriority();
+        Integer priority1, priority2;
+
+        priority2 = bean2.getAlternativePriority();
+        if (priority2 == null) {
+            priority2 = bean2.getDeclaringBean().getAlternativePriority();
+        }
+
+        priority1 = bean1.getAlternativePriority();
+        if (priority1 == null) {
+            priority1 = bean1.getDeclaringBean().getAlternativePriority();
+        }
+
+        if (priority2 == null || priority1 == null) {
+            throw new IllegalStateException(String.format(
+                    "Alternative Bean priority should not be null. %s has priority %s; %s has priority %s",
+                    bean1.getBeanClass(), priority1,
+                    bean2.getBeanClass(), priority2));
+        }
+
         return priority2.compareTo(priority1);
     }
 
@@ -662,7 +670,7 @@ final class Beans {
                     if (!DotNames.OBJECT.equals(superName)) {
                         ClassInfo superClass = bean.getDeployment().getIndex().getClassByName(beanClass.superName());
                         if (superClass == null || !superClass.hasNoArgsConstructor()) {
-                            // Bean class extend a class without no-args constructor
+                            // Bean class extends a class without no-args constructor
                             // It is not possible to generate a no-args constructor reliably
                             superName = null;
                         }
@@ -672,9 +680,10 @@ final class Beans {
                         bytecodeTransformerConsumer.accept(new BytecodeTransformer(beanClass.name().toString(),
                                 new NoArgConstructorTransformFunction(superClassName)));
                     } else {
-                        errors.add(new DeploymentException(String
-                                .format("It is not possible to add a synthetic constructor with no parameters to the unproxyable bean class: %s",
-                                        beanClass)));
+                        errors.add(new DeploymentException(
+                                "It's not possible to add a synthetic constructor with no parameters to the unproxyable bean class: "
+                                        +
+                                        beanClass));
                     }
                 } else {
                     errors.add(new DeploymentException(String
@@ -724,19 +733,19 @@ final class Beans {
                         if (!DotNames.OBJECT.equals(superName)) {
                             ClassInfo superClass = bean.getDeployment().getIndex().getClassByName(returnTypeClass.superName());
                             if (superClass == null || !superClass.hasNoArgsConstructor()) {
-                                // Bean class extend a class without no-args constructor
+                                // Bean class extends a class without no-args constructor
                                 // It is not possible to generate a no-args constructor reliably
                                 superName = null;
-                            } else {
-                                errors.add(new DeploymentException(String
-                                        .format("It is not possible to add a synthetic constructor with no parameters to the unproxyable return type of: %s",
-                                                bean)));
                             }
                         }
                         if (superName != null) {
                             String superClassName = superName.toString().replace('.', '/');
                             bytecodeTransformerConsumer.accept(new BytecodeTransformer(returnTypeClass.name().toString(),
                                     new NoArgConstructorTransformFunction(superClassName)));
+                        } else {
+                            errors.add(new DeploymentException(String
+                                    .format("It's not possible to add a synthetic constructor with no parameters to the unproxyable return type of "
+                                            + bean)));
                         }
                     } else {
                         errors.add(new DefinitionException(String
@@ -829,6 +838,24 @@ final class Beans {
         } else {
             return producerMethod.name();
         }
+    }
+
+    private static Integer initAlternativePriority(AnnotationTarget target, Integer alternativePriority,
+            List<StereotypeInfo> stereotypes, BeanDeployment deployment) {
+        if (alternativePriority == null) {
+            // No @Priority or @AlernativePriority used - try stereotypes
+            alternativePriority = initStereotypeAlternativePriority(stereotypes);
+        }
+        Integer computedPriority = deployment.computeAlternativePriority(target, stereotypes);
+        if (computedPriority != null) {
+            if (alternativePriority != null) {
+                LOGGER.infof(
+                        "Computed priority [%s] overrides the priority [%s] declared via @Priority or @AlernativePriority",
+                        computedPriority, alternativePriority);
+            }
+            alternativePriority = computedPriority;
+        }
+        return alternativePriority;
     }
 
     static class FinalClassTransformFunction implements BiFunction<String, ClassVisitor, ClassVisitor> {

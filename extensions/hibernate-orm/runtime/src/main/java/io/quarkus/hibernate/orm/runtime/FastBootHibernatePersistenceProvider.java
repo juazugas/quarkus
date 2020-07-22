@@ -35,7 +35,7 @@ import io.quarkus.hibernate.orm.runtime.recording.RecordedState;
  * that: we need to be able to fully exclude HibernatePersistenceProvider from
  * the native image.
  */
-final class FastBootHibernatePersistenceProvider implements PersistenceProvider {
+public final class FastBootHibernatePersistenceProvider implements PersistenceProvider {
 
     private static final Logger log = Logger.getLogger(FastBootHibernatePersistenceProvider.class);
 
@@ -92,8 +92,12 @@ final class FastBootHibernatePersistenceProvider implements PersistenceProvider 
     }
 
     @SuppressWarnings("rawtypes")
-    protected EntityManagerFactoryBuilder getEntityManagerFactoryBuilder(PersistenceUnitInfo info, Map integration) {
-        throw new UnsupportedOperationException("Not implemented");
+    public EntityManagerFactoryBuilder getEntityManagerFactoryBuilder(PersistenceUnitInfo info, Map integration) {
+        return getEntityManagerFactoryBuilder(info.getPersistenceUnitName(), integration);
+    }
+
+    public EntityManagerFactoryBuilder getEntityManagerFactoryBuilder(String persistenceUnitName, Map integration) {
+        return getEntityManagerFactoryBuilderOrNull(persistenceUnitName, integration);
     }
 
     /**
@@ -145,6 +149,10 @@ final class FastBootHibernatePersistenceProvider implements PersistenceProvider 
 
             RecordedState recordedState = PersistenceUnitsHolder.getRecordedState(persistenceUnitName);
 
+            if (recordedState.isReactive()) {
+                throw new IllegalStateException(
+                        "Attempting to boot a blocking Hibernate ORM instance on a reactive RecordedState");
+            }
             final PrevalidatedQuarkusMetadata metadata = recordedState.getMetadata();
             final BuildTimeSettings buildTimeSettings = recordedState.getBuildTimeSettings();
             final IntegrationSettings integrationSettings = recordedState.getIntegrationSettings();
@@ -169,7 +177,7 @@ final class FastBootHibernatePersistenceProvider implements PersistenceProvider 
                     persistenceUnitName,
                     standardServiceRegistry /* Mostly ignored! (yet needs to match) */,
                     runtimeSettings,
-                    validatorFactory, cdiBeanManager);
+                    validatorFactory, cdiBeanManager, recordedState.getMultiTenancyStrategy());
         }
 
         log.debug("Found no matching persistence units");

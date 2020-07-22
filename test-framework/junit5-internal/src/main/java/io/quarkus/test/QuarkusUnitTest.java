@@ -66,6 +66,8 @@ public class QuarkusUnitTest
         implements BeforeAllCallback, AfterAllCallback, BeforeEachCallback, AfterEachCallback,
         InvocationInterceptor {
 
+    public static final String THE_BUILD_WAS_EXPECTED_TO_FAIL = "The build was expected to fail";
+
     static {
         System.setProperty("java.util.logging.manager", "org.jboss.logmanager.LogManager");
     }
@@ -93,6 +95,7 @@ public class QuarkusUnitTest
 
     private Class<?> actualTestClass;
     private Object actualTestInstance;
+    private String[] commandLineParameters = new String[0];
 
     private boolean allowTestClassOutsideDeployment;
 
@@ -171,6 +174,15 @@ public class QuarkusUnitTest
      */
     public QuarkusUnitTest setForcedDependencies(List<AppArtifact> forcedDependencies) {
         this.forcedDependencies = forcedDependencies;
+        return this;
+    }
+
+    public String[] getCommandLineParameters() {
+        return commandLineParameters;
+    }
+
+    public QuarkusUnitTest setCommandLineParameters(String... commandLineParameters) {
+        this.commandLineParameters = commandLineParameters;
         return this;
     }
 
@@ -319,6 +331,7 @@ public class QuarkusUnitTest
         ExtensionContext.Store store = extensionContext.getRoot().getStore(ExtensionContext.Namespace.GLOBAL);
         if (store.get(TestResourceManager.class.getName()) == null) {
             TestResourceManager manager = new TestResourceManager(extensionContext.getRequiredTestClass());
+            manager.init();
             manager.start();
             store.put(TestResourceManager.class.getName(), new ExtensionContext.Store.CloseableResource() {
 
@@ -367,12 +380,18 @@ public class QuarkusUnitTest
             final Path testLocation = PathTestHelper.getTestClassesLocation(testClass);
 
             try {
-                QuarkusBootstrap.Builder builder = QuarkusBootstrap.builder(deploymentDir)
+                QuarkusBootstrap.Builder builder = QuarkusBootstrap.builder()
+                        .setApplicationRoot(deploymentDir)
                         .setMode(QuarkusBootstrap.Mode.TEST)
                         .addExcludedPath(testLocation)
                         .setProjectRoot(testLocation)
                         .setForcedDependencies(forcedDependencies.stream().map(d -> new AppDependency(d, "compile"))
                                 .collect(Collectors.toList()));
+                if (!forcedDependencies.isEmpty()) {
+                    //if we have forced dependencies we can't use the cache
+                    //as it can screw everything up
+                    builder.setDisableClasspathCache(true);
+                }
                 if (!allowTestClassOutsideDeployment) {
                     builder
                             .setBaseClassLoader(
@@ -384,11 +403,11 @@ public class QuarkusUnitTest
 
                 runningQuarkusApplication = new AugmentActionImpl(curatedApplication, customizers)
                         .createInitialRuntimeApplication()
-                        .run(new String[0]);
+                        .run(commandLineParameters);
                 //we restore the CL at the end of the test
                 Thread.currentThread().setContextClassLoader(runningQuarkusApplication.getClassLoader());
                 if (assertException != null) {
-                    fail("The build was expected to fail");
+                    fail(THE_BUILD_WAS_EXPECTED_TO_FAIL);
                 }
                 started = true;
                 System.setProperty("test.url", TestHTTPResourceManager.getUri(runningQuarkusApplication));
@@ -407,6 +426,10 @@ public class QuarkusUnitTest
             } catch (Throwable e) {
                 started = false;
                 if (assertException != null) {
+                    if (e instanceof AssertionError && e.getMessage().equals(THE_BUILD_WAS_EXPECTED_TO_FAIL)) {
+                        //don't pass the 'no failure' assertion into the assert exception function
+                        throw e;
+                    }
                     if (e instanceof RuntimeException) {
                         Throwable cause = e.getCause();
                         if (cause != null && cause instanceof BuildException) {
@@ -451,7 +474,9 @@ public class QuarkusUnitTest
             if (afterUndeployListener != null) {
                 afterUndeployListener.run();
             }
-            curatedApplication.close();
+            if (curatedApplication != null) {
+                curatedApplication.close();
+            }
         } finally {
             System.clearProperty("test.url");
             Thread.currentThread().setContextClassLoader(originalClassLoader);
@@ -460,9 +485,10 @@ public class QuarkusUnitTest
             if (deploymentDir != null) {
                 FileUtil.deleteDirectory(deploymentDir);
             }
-        }
-        if (afterAllCustomizer != null) {
-            afterAllCustomizer.run();
+
+            if (afterAllCustomizer != null) {
+                afterAllCustomizer.run();
+            }
         }
     }
 

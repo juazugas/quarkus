@@ -31,10 +31,11 @@ import io.quarkus.arc.deployment.GeneratedBeanGizmoAdaptor;
 import io.quarkus.arc.deployment.InterceptorBindingRegistrarBuildItem;
 import io.quarkus.arc.deployment.UnremovableBeanBuildItem;
 import io.quarkus.arc.processor.AnnotationsTransformer;
+import io.quarkus.deployment.Feature;
 import io.quarkus.deployment.GeneratedClassGizmoAdaptor;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
-import io.quarkus.deployment.builditem.ApplicationIndexBuildItem;
+import io.quarkus.deployment.builditem.CombinedIndexBuildItem;
 import io.quarkus.deployment.builditem.FeatureBuildItem;
 import io.quarkus.deployment.builditem.GeneratedClassBuildItem;
 import io.quarkus.gizmo.BytecodeCreator;
@@ -65,7 +66,7 @@ class SpringSecurityProcessor {
 
     @BuildStep
     FeatureBuildItem feature() {
-        return new FeatureBuildItem(FeatureBuildItem.SPRING_SECURITY);
+        return new FeatureBuildItem(Feature.SPRING_SECURITY);
     }
 
     @BuildStep
@@ -77,7 +78,7 @@ class SpringSecurityProcessor {
     }
 
     @BuildStep
-    void addSpringSecuredSecurityCheck(ApplicationIndexBuildItem index,
+    void addSpringSecuredSecurityCheck(CombinedIndexBuildItem index,
             BuildProducer<AdditionalSecurityCheckBuildItem> additionalSecurityCheckBuildItems) {
 
         Set<MethodInfo> methodsWithSecurityAnnotation = new HashSet<>();
@@ -175,7 +176,7 @@ class SpringSecurityProcessor {
 
     @BuildStep
     void locatePreAuthorizedInstances(
-            ApplicationIndexBuildItem index,
+            CombinedIndexBuildItem index,
             BuildProducer<SpringPreAuthorizeAnnotatedMethodBuildItem> springPreAuthorizeAnnotatedMethods,
             BuildProducer<AnnotationsTransformerBuildItem> annotationsTransformer) {
         Map<MethodInfo, AnnotationInstance> result = new HashMap<>();
@@ -193,7 +194,8 @@ class SpringSecurityProcessor {
             result.put(methodInfo, instance);
         }
 
-        Set<ClassInfo> metaAnnotations = new HashSet<>();
+        // don't use ClassInfo in a Set because it (purposely) doesn't implement equals and hashcode
+        Map<DotName, ClassInfo> metaAnnotations = new HashMap<>();
 
         // now check for instances on classes and methods that aren't already annotated with a security annotation
         for (AnnotationInstance instance : index.getIndex().getAnnotations(DotNames.SPRING_PRE_AUTHORIZE)) {
@@ -206,7 +208,7 @@ class SpringSecurityProcessor {
             ClassInfo classInfo = instance.target().asClass();
             if (isAnnotation(classInfo.flags())) {
                 // if the instance is an annotation we need to record it and handle it later
-                metaAnnotations.add(classInfo);
+                metaAnnotations.put(classInfo.name(), classInfo);
                 continue;
             }
             checksStandardSecurity(instance, classInfo);
@@ -227,8 +229,8 @@ class SpringSecurityProcessor {
         /*
          * For each meta-annotation add the value of @PreAuthorize to the method tracking map
          */
-        Set<ClassInfo> classesInNeedOfAnnotationTransformation = new HashSet<>();
-        for (ClassInfo metaAnnotation : metaAnnotations) {
+        Set<DotName> classesInNeedOfAnnotationTransformation = new HashSet<>();
+        for (ClassInfo metaAnnotation : metaAnnotations.values()) {
             for (AnnotationInstance instance : index.getIndex().getAnnotations(metaAnnotation.name())) {
                 if (instance.target().kind() != AnnotationTarget.Kind.METHOD) {
                     continue;
@@ -236,7 +238,7 @@ class SpringSecurityProcessor {
                 MethodInfo methodInfo = instance.target().asMethod();
                 checksStandardSecurity(instance, methodInfo);
                 result.put(methodInfo, metaAnnotation.classAnnotation(DotNames.SPRING_PRE_AUTHORIZE));
-                classesInNeedOfAnnotationTransformation.add(methodInfo.declaringClass());
+                classesInNeedOfAnnotationTransformation.add(methodInfo.declaringClass().name());
             }
         }
 
@@ -256,7 +258,7 @@ class SpringSecurityProcessor {
             @Override
             public void transform(TransformationContext transformationContext) {
                 ClassInfo classInfo = transformationContext.getTarget().asClass();
-                if (classesInNeedOfAnnotationTransformation.contains(classInfo)) {
+                if (classesInNeedOfAnnotationTransformation.contains(classInfo.name())) {
                     transformationContext.transform()
                             .add(DotNames.SPRING_PRE_AUTHORIZE, AnnotationValue.createStringValue("value", "")).done();
                 }
@@ -268,12 +270,12 @@ class SpringSecurityProcessor {
      * The generation needs to be done in it's own build step otherwise we can end up with build cycle errors
      */
     @BuildStep
-    void generateNecessarySupportClasses(ApplicationIndexBuildItem index,
+    void generateNecessarySupportClasses(CombinedIndexBuildItem index,
             SpringPreAuthorizeAnnotatedMethodBuildItem springPreAuthorizeAnnotatedMethods,
             BuildProducer<GeneratedBeanBuildItem> generatedBeans,
             BuildProducer<UnremovableBeanBuildItem> unremovableBeans) {
 
-        Map<ClassInfo, Set<FieldInfo>> stringPropertiesInNeedOfGeneratedAccessors = new HashMap<>();
+        Map<DotName, Set<FieldInfo>> stringPropertiesInNeedOfGeneratedAccessors = new HashMap<>();
 
         for (Map.Entry<MethodInfo, AnnotationInstance> entry : springPreAuthorizeAnnotatedMethods.getMethodToInstanceMap()
                 .entrySet()) {
@@ -317,11 +319,11 @@ class SpringSecurityProcessor {
                                 part);
 
                         Set<FieldInfo> fields = stringPropertiesInNeedOfGeneratedAccessors.getOrDefault(
-                                stringPropertyAccessorData.getMatchingParameterClassInfo(),
+                                stringPropertyAccessorData.getMatchingParameterClassInfo().name(),
                                 new HashSet<>());
                         fields.add(stringPropertyAccessorData.getMatchingParameterFieldInfo());
                         stringPropertiesInNeedOfGeneratedAccessors.put(
-                                stringPropertyAccessorData.getMatchingParameterClassInfo(),
+                                stringPropertyAccessorData.getMatchingParameterClassInfo().name(),
                                 fields);
                     }
                 }
@@ -332,7 +334,7 @@ class SpringSecurityProcessor {
         if (!stringPropertiesInNeedOfGeneratedAccessors.isEmpty()) {
             GeneratedBeanGizmoAdaptor classOutput = new GeneratedBeanGizmoAdaptor(generatedBeans);
             Set<String> generatedBeanClassNames = new HashSet<>(stringPropertiesInNeedOfGeneratedAccessors.keySet().size());
-            for (Map.Entry<ClassInfo, Set<FieldInfo>> entry : stringPropertiesInNeedOfGeneratedAccessors.entrySet()) {
+            for (Map.Entry<DotName, Set<FieldInfo>> entry : stringPropertiesInNeedOfGeneratedAccessors.entrySet()) {
                 String generateClassName = StringPropertyAccessorGenerator.generate(entry.getKey(), entry.getValue(),
                         classOutput);
                 generatedBeanClassNames.add(generateClassName);
@@ -343,7 +345,7 @@ class SpringSecurityProcessor {
     }
 
     @BuildStep
-    void addSpringPreAuthorizeSecurityCheck(ApplicationIndexBuildItem index,
+    void addSpringPreAuthorizeSecurityCheck(CombinedIndexBuildItem index,
             SpringPreAuthorizeAnnotatedMethodBuildItem springPreAuthorizeAnnotatedMethods,
             SpringBeanNameToDotNameBuildItem springBeanNames,
             BuildProducer<AdditionalSecurityCheckBuildItem> additionalSecurityChecks,
@@ -470,7 +472,8 @@ class SpringSecurityProcessor {
                                 parameterNameAndIndex.getIndex(),
                                 stringPropertyAccessorData.getMatchingParameterClassInfo().name().toString(),
                                 StringPropertyAccessorGenerator
-                                        .getAccessorClassName(stringPropertyAccessorData.getMatchingParameterClassInfo()),
+                                        .getAccessorClassName(
+                                                stringPropertyAccessorData.getMatchingParameterClassInfo().name()),
                                 stringPropertyAccessorData.getMatchingParameterFieldInfo().name()));
 
                     }

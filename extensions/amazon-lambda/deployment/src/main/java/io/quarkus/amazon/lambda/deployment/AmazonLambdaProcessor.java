@@ -1,6 +1,7 @@
 package io.quarkus.amazon.lambda.deployment;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -28,6 +29,7 @@ import io.quarkus.amazon.lambda.runtime.LambdaConfig;
 import io.quarkus.arc.deployment.AdditionalBeanBuildItem;
 import io.quarkus.arc.deployment.BeanContainerBuildItem;
 import io.quarkus.builder.BuildException;
+import io.quarkus.deployment.Feature;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.ExecutionTime;
@@ -57,7 +59,7 @@ public final class AmazonLambdaProcessor {
 
     @BuildStep
     FeatureBuildItem feature() {
-        return new FeatureBuildItem(FeatureBuildItem.AMAZON_LAMBDA);
+        return new FeatureBuildItem(Feature.AMAZON_LAMBDA);
     }
 
     @BuildStep
@@ -76,7 +78,7 @@ public final class AmazonLambdaProcessor {
         allKnownImplementors.addAll(combinedIndexBuildItem.getIndex()
                 .getAllKnownImplementors(REQUEST_STREAM_HANDLER));
         allKnownImplementors.addAll(combinedIndexBuildItem.getIndex()
-                .getAllKnownImplementors(SKILL_STREAM_HANDLER));
+                .getAllKnownSubclasses(SKILL_STREAM_HANDLER));
 
         if (allKnownImplementors.size() > 0 && providedLambda.isPresent()) {
             throw new BuildException(
@@ -89,20 +91,24 @@ public final class AmazonLambdaProcessor {
         List<AmazonLambdaBuildItem> ret = new ArrayList<>();
 
         for (ClassInfo info : allKnownImplementors) {
-            final DotName name = info.name();
-            builder.addBeanClass(name.toString());
-            String cdiName = null;
-            List<AnnotationInstance> named = info.annotations().get(NAMED);
-            if (named != null && !named.isEmpty()) {
-                cdiName = named.get(0).value().asString();
+            if (Modifier.isAbstract(info.flags())) {
+                continue;
             }
 
+            final DotName name = info.name();
             final String lambda = name.toString();
+            builder.addBeanClass(lambda);
             reflectiveClassBuildItemBuildProducer.produce(new ReflectiveClassBuildItem(true, false, lambda));
+
+            String cdiName = null;
+            AnnotationInstance named = info.classAnnotation(NAMED);
+            if (named != null) {
+                cdiName = named.value().asString();
+            }
 
             ClassInfo current = info;
             boolean done = false;
-            boolean streamHandler = false;
+            boolean streamHandler = info.superName().equals(SKILL_STREAM_HANDLER) ? true : false;
             while (current != null && !done) {
                 for (MethodInfo method : current.methods()) {
                     if (method.name().equals("handleRequest")) {

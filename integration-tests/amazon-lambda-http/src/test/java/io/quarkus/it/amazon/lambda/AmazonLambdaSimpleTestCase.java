@@ -5,6 +5,8 @@ import javax.ws.rs.core.MediaType;
 import org.apache.commons.codec.binary.Base64;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import io.quarkus.amazon.lambda.http.model.AwsProxyRequest;
 import io.quarkus.amazon.lambda.http.model.AwsProxyResponse;
@@ -22,6 +24,16 @@ public class AmazonLambdaSimpleTestCase {
         testGetText("/hello");
     }
 
+    @Test
+    public void testSwaggerUi() throws Exception {
+        // this tests the FileRegion support in the handler
+        AwsProxyRequest request = request("/swagger-ui/");
+        AwsProxyResponse out = LambdaClient.invoke(AwsProxyResponse.class, request);
+        Assertions.assertEquals(out.getStatusCode(), 200);
+        Assertions.assertTrue(body(out).contains("Swagger UI"));
+
+    }
+
     private String body(AwsProxyResponse response) {
         if (!response.isBase64Encoded())
             return response.getBody();
@@ -29,20 +41,23 @@ public class AmazonLambdaSimpleTestCase {
     }
 
     private void testGetText(String path) {
-        AwsProxyRequest request = new AwsProxyRequest();
-        request.setHttpMethod("GET");
-        request.setPath(path);
+        AwsProxyRequest request = request(path);
         AwsProxyResponse out = LambdaClient.invoke(AwsProxyResponse.class, request);
         Assertions.assertEquals(out.getStatusCode(), 200);
         Assertions.assertEquals(body(out), "hello");
         Assertions.assertTrue(out.getMultiValueHeaders().getFirst("Content-Type").startsWith("text/plain"));
     }
 
-    @Test
-    public void test404() throws Exception {
+    private AwsProxyRequest request(String path) {
         AwsProxyRequest request = new AwsProxyRequest();
         request.setHttpMethod("GET");
-        request.setPath("/nowhere");
+        request.setPath(path);
+        return request;
+    }
+
+    @Test
+    public void test404() throws Exception {
+        AwsProxyRequest request = request("/nowhere");
         AwsProxyResponse out = LambdaClient.invoke(AwsProxyResponse.class, request);
         Assertions.assertEquals(out.getStatusCode(), 404);
     }
@@ -98,6 +113,21 @@ public class AmazonLambdaSimpleTestCase {
         AwsProxyResponse out = LambdaClient.invoke(AwsProxyResponse.class, request);
         Assertions.assertEquals(out.getStatusCode(), 204);
 
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "/funqy", "/funqyAsync" })
+    public void testFunqy(String path) {
+        AwsProxyRequest request = new AwsProxyRequest();
+        request.setHttpMethod("POST");
+        request.setMultiValueHeaders(new Headers());
+        request.getMultiValueHeaders().add("Content-Type", "application/json");
+        request.setPath(path);
+        request.setBody("\"Bill\"");
+        AwsProxyResponse out = LambdaClient.invoke(AwsProxyResponse.class, request);
+        Assertions.assertEquals(out.getStatusCode(), 200);
+        Assertions.assertEquals(body(out), "\"Make it funqy Bill\"");
+        Assertions.assertTrue(out.getMultiValueHeaders().getFirst("Content-Type").startsWith("application/json"));
     }
 
 }
