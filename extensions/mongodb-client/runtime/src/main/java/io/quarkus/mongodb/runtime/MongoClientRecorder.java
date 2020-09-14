@@ -9,6 +9,7 @@ import javax.enterprise.inject.literal.NamedLiteral;
 import javax.enterprise.util.AnnotationLiteral;
 
 import com.mongodb.client.MongoClient;
+import com.mongodb.event.CommandListener;
 import com.mongodb.event.ConnectionPoolListener;
 
 import io.quarkus.arc.Arc;
@@ -26,12 +27,19 @@ public class MongoClientRecorder {
         return new Supplier<MongoClientSupport>() {
             @Override
             public MongoClientSupport get() {
+
                 List<ConnectionPoolListener> connectionPoolListeners = new ArrayList<>(connectionPoolListenerSuppliers.size());
                 for (Supplier<ConnectionPoolListener> item : connectionPoolListenerSuppliers) {
                     connectionPoolListeners.add(item.get());
                 }
+                final CommandListener commandListener = Arc.container().instance(CommandListener.class).get();
 
-                return new MongoClientSupport(codecProviders, bsonDiscriminators, connectionPoolListeners, disableSslSupport);
+                MongoClientSupport mongoClientSupport = new MongoClientSupport(codecProviders, bsonDiscriminators,
+                        connectionPoolListeners, disableSslSupport);
+                if (null != commandListener) {
+                    mongoClientSupport.addCommandListener(commandListener);
+                }
+                return mongoClientSupport;
             }
         };
     }

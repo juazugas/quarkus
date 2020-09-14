@@ -249,6 +249,10 @@ public class MongoClients {
                 CodecRegistries.fromProviders(providers));
         settings.codecRegistry(registry);
 
+        if (!mongoClientSupport.getCommandListeners().isEmpty()) {
+            settings.commandListenerList(mongoClientSupport.getCommandListeners());
+        }
+
         config.applicationName.ifPresent(settings::applicationName);
 
         if (config.credentials != null) {
