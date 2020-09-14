@@ -49,16 +49,8 @@ public class MongoClientSupport {
         return commandListeners;
     }
 
-    public void setCommandListenerList(List<CommandListener> commandListenersList) {
-        if (null != commandListenersList && !commandListenersList.isEmpty()) {
-            commandListeners.addAll(commandListenersList);
-        }
-    }
-
     public void addCommandListener(CommandListener commandListener) {
-        if (null != commandListener) {
-            commandListeners.add(commandListener);
-        }
+        commandListeners.add(commandListener);
     }
 
     public boolean isDisableSslSupport() {
