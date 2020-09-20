@@ -9,6 +9,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
@@ -23,6 +24,7 @@ import org.jboss.jandex.DotName;
 import org.jboss.jandex.IndexView;
 
 import com.mongodb.client.MongoClient;
+import com.mongodb.event.CommandListener;
 import com.mongodb.event.ConnectionPoolListener;
 
 import io.quarkus.arc.deployment.AdditionalBeanBuildItem;
@@ -32,6 +34,8 @@ import io.quarkus.arc.deployment.SyntheticBeanBuildItem;
 import io.quarkus.arc.processor.BuildExtension;
 import io.quarkus.arc.processor.DotNames;
 import io.quarkus.arc.processor.InjectionPointInfo;
+import io.quarkus.deployment.Capabilities;
+import io.quarkus.deployment.Capability;
 import io.quarkus.deployment.Feature;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
@@ -42,6 +46,7 @@ import io.quarkus.deployment.builditem.ApplicationArchivesBuildItem;
 import io.quarkus.deployment.builditem.CombinedIndexBuildItem;
 import io.quarkus.deployment.builditem.ExtensionSslNativeSupportBuildItem;
 import io.quarkus.deployment.builditem.FeatureBuildItem;
+import io.quarkus.deployment.builditem.IndexDependencyBuildItem;
 import io.quarkus.deployment.builditem.SslNativeConfigBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.deployment.metrics.MetricsCapabilityBuildItem;
@@ -62,6 +67,15 @@ public class MongoClientProcessor {
 
     private static final DotName MONGO_CLIENT = DotName.createSimple(MongoClient.class.getName());
     private static final DotName REACTIVE_MONGO_CLIENT = DotName.createSimple(ReactiveMongoClient.class.getName());
+
+    static class MongoClientTracingEnabled implements BooleanSupplier {
+        MongoClientBuildTimeConfig mConfig;
+
+        @Override
+        public boolean getAsBoolean() {
+            return mConfig.tracingEnabled;
+        }
+    }
 
     @BuildStep
     CodecProviderBuildItem collectCodecProviders(CombinedIndexBuildItem indexBuildItem) {
@@ -91,6 +105,11 @@ public class MongoClientProcessor {
         return reflectiveClassNames.stream()
                 .map(s -> new ReflectiveClassBuildItem(true, true, false, s))
                 .collect(Collectors.toList());
+    }
+
+    @BuildStep(onlyIf = MongoClientTracingEnabled.class)
+    IndexDependencyBuildItem addTRacingDependencies() {
+        return new IndexDependencyBuildItem("io.opentracing.contrib", "opentracing-mongo-common");
     }
 
     @BuildStep
@@ -141,6 +160,21 @@ public class MongoClientProcessor {
         return null;
     }
 
+    @BuildStep
+    @Record(STATIC_INIT)
+    MongoCommandListenerBuildItem setupTracing(
+            Capabilities capabilities,
+            MongoClientBuildTimeConfig buildTimeConfig,
+            MongoClientRecorder recorder) {
+
+        if (buildTimeConfig.tracingEnabled && capabilities.isPresent(Capability.SMALLRYE_OPENTRACING)) {
+            // "io.opentracing.contrib.mongo.common.TracingCommandListener"
+            return new MongoCommandListenerBuildItem(recorder.createMongoTracingCommandListener());
+        }
+        return null;
+
+    }
+
     @Record(STATIC_INIT)
     @BuildStep
     void build(
@@ -150,6 +184,7 @@ public class MongoClientProcessor {
             CodecProviderBuildItem codecProvider,
             BsonDiscriminatorBuildItem bsonDiscriminator,
             List<MongoConnectionPoolListenerBuildItem> connectionPoolListenerProvider,
+            List<MongoCommandListenerBuildItem> commandListenerProvider,
             BuildProducer<MongoConnectionNameBuildItem> mongoConnections,
             BuildProducer<SyntheticBeanBuildItem> syntheticBeanBuildItemBuildProducer,
             BuildProducer<AdditionalBeanBuildItem> additionalBeans) {
@@ -164,6 +199,9 @@ public class MongoClientProcessor {
             poolListenerList.add(item.getConnectionPoolListener());
         }
 
+        List<Supplier<CommandListener>> commandListenerList = new ArrayList<>(commandListenerProvider.size());
+        commandListenerProvider.forEach(item -> commandListenerList.add(item.getCommandListener()));
+
         // make MongoClients an unremoveable bean
         additionalBeans.produce(AdditionalBeanBuildItem.builder().addBeanClasses(MongoClients.class).setUnremovable().build());
 
@@ -172,7 +210,7 @@ public class MongoClientProcessor {
                 .scope(Singleton.class)
                 .supplier(recorder.mongoClientSupportSupplier(codecProvider.getCodecProviderClassNames(),
                         bsonDiscriminator.getBsonDiscriminatorClassNames(),
-                        poolListenerList, sslNativeConfig.isExplicitlyDisabled()))
+                        poolListenerList, commandListenerList, sslNativeConfig.isExplicitlyDisabled()))
                 .done());
 
         mongoConnections.produce(new MongoConnectionNameBuildItem(MongoClientBeanUtil.DEFAULT_MONGOCLIENT_NAME));

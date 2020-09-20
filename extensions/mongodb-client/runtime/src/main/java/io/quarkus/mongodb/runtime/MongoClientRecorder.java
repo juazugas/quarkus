@@ -16,6 +16,7 @@ import io.quarkus.arc.Arc;
 import io.quarkus.mongodb.metrics.MicrometerConnectionPoolListener;
 import io.quarkus.mongodb.metrics.MongoMetricsConnectionPoolListener;
 import io.quarkus.mongodb.reactive.ReactiveMongoClient;
+import io.quarkus.mongodb.tracing.MongoTracingCommandListenerProducer;
 import io.quarkus.runtime.RuntimeValue;
 import io.quarkus.runtime.annotations.Recorder;
 
@@ -23,7 +24,8 @@ import io.quarkus.runtime.annotations.Recorder;
 public class MongoClientRecorder {
 
     public Supplier<MongoClientSupport> mongoClientSupportSupplier(List<String> codecProviders, List<String> bsonDiscriminators,
-            List<Supplier<ConnectionPoolListener>> connectionPoolListenerSuppliers, boolean disableSslSupport) {
+            List<Supplier<ConnectionPoolListener>> connectionPoolListenerSuppliers,
+            List<Supplier<CommandListener>> commandListenerSuppliers, boolean disableSslSupport) {
         return new Supplier<MongoClientSupport>() {
             @Override
             public MongoClientSupport get() {
@@ -32,13 +34,11 @@ public class MongoClientRecorder {
                 for (Supplier<ConnectionPoolListener> item : connectionPoolListenerSuppliers) {
                     connectionPoolListeners.add(item.get());
                 }
-                final CommandListener commandListener = Arc.container().instance(CommandListener.class).get();
+                List<CommandListener> commandListeners = new ArrayList<>(commandListenerSuppliers.size());
+                commandListenerSuppliers.forEach(item -> commandListeners.add(item.get()));
 
                 MongoClientSupport mongoClientSupport = new MongoClientSupport(codecProviders, bsonDiscriminators,
-                        connectionPoolListeners, disableSslSupport);
-                if (null != commandListener) {
-                    mongoClientSupport.addCommandListener(commandListener);
-                }
+                        connectionPoolListeners, commandListeners, disableSslSupport);
                 return mongoClientSupport;
             }
         };
@@ -100,6 +100,15 @@ public class MongoClientRecorder {
             @Override
             public ConnectionPoolListener get() {
                 return new MongoMetricsConnectionPoolListener();
+            }
+        };
+    }
+
+    public Supplier<CommandListener> createMongoTracingCommandListener() {
+        return new Supplier<CommandListener>() {
+            @Override
+            public CommandListener get() {
+                return MongoTracingCommandListenerProducer.createMongoTracingCommandListener();
             }
         };
     }
