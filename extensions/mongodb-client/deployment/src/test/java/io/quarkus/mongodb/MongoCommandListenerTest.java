@@ -11,7 +11,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import com.mongodb.client.MongoClient;
-import com.mongodb.event.CommandStartedEvent;
 
 import io.quarkus.test.QuarkusUnitTest;
 
@@ -19,9 +18,6 @@ public class MongoCommandListenerTest extends MongoTestBase {
 
     @Inject
     MongoClient client;
-
-    @Inject
-    MockCommandListener listener;
 
     @RegisterExtension
     static final QuarkusUnitTest config = new QuarkusUnitTest()
@@ -39,10 +35,6 @@ public class MongoCommandListenerTest extends MongoTestBase {
     @Test
     void testClientInitialization() {
         assertThat(client.listDatabaseNames().first()).isNotEmpty();
-        assertThat(listener).isNotNull();
-        CommandStartedEvent startedEvent = listener.getCommandStartedEvent();
-        assertThat(startedEvent).isNotNull();
-        assertThat(startedEvent.getCommandName()).isEqualTo("listDatabases");
     }
 
 }

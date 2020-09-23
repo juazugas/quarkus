@@ -9,7 +9,6 @@ import javax.enterprise.inject.literal.NamedLiteral;
 import javax.enterprise.util.AnnotationLiteral;
 
 import com.mongodb.client.MongoClient;
-import com.mongodb.event.CommandListener;
 import com.mongodb.event.ConnectionPoolListener;
 
 import io.quarkus.arc.Arc;
@@ -22,7 +21,7 @@ import io.quarkus.runtime.annotations.Recorder;
 @Recorder
 public class MongoClientRecorder {
 
-    public Supplier<MongoClientSupport> mongoClientSupportSupplier(List<String> codecProviders, List<String> bsonDiscriminators,
+    public Supplier<MongoClientSupport> mongoClientSupportSupplier(List<String> codecProviders, List<String> bsonDiscriminators, List<String> commandListeners,
             List<Supplier<ConnectionPoolListener>> connectionPoolListenerSuppliers, boolean disableSslSupport) {
         return new Supplier<MongoClientSupport>() {
             @Override
@@ -32,14 +31,9 @@ public class MongoClientRecorder {
                 for (Supplier<ConnectionPoolListener> item : connectionPoolListenerSuppliers) {
                     connectionPoolListeners.add(item.get());
                 }
-                final CommandListener commandListener = Arc.container().instance(CommandListener.class).get();
 
-                MongoClientSupport mongoClientSupport = new MongoClientSupport(codecProviders, bsonDiscriminators,
+                return new MongoClientSupport(codecProviders, bsonDiscriminators, commandListeners,
                         connectionPoolListeners, disableSslSupport);
-                if (null != commandListener) {
-                    mongoClientSupport.addCommandListener(commandListener);
-                }
-                return mongoClientSupport;
             }
         };
     }

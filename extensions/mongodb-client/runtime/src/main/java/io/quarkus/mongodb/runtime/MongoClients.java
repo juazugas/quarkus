@@ -44,6 +44,7 @@ import com.mongodb.connection.ConnectionPoolSettings;
 import com.mongodb.connection.ServerSettings;
 import com.mongodb.connection.SocketSettings;
 import com.mongodb.connection.SslSettings;
+import com.mongodb.event.CommandListener;
 import com.mongodb.event.ConnectionPoolListener;
 
 import io.quarkus.mongodb.impl.ReactiveMongoClientImpl;
@@ -249,7 +250,11 @@ public class MongoClients {
                 CodecRegistries.fromProviders(providers));
         settings.codecRegistry(registry);
 
-        settings.commandListenerList(mongoClientSupport.getCommandListeners());
+        List<CommandListener> listeners = new ArrayList<>();
+        if (!mongoClientSupport.getCommandListeners().isEmpty()) {
+            listeners.addAll(getCommandListeners(mongoClientSupport.getCommandListeners()));
+        }
+        settings.commandListenerList(listeners);
 
         config.applicationName.ifPresent(settings::applicationName);
 
@@ -384,6 +389,21 @@ public class MongoClients {
         }
 
         return providers;
+    }
+
+    private List<CommandListener> getCommandListeners(List<String> classNames) {
+        List<CommandListener> listeners = new ArrayList<>();
+        for (String name : classNames) {
+            try {
+                Class<?> clazz = Thread.currentThread().getContextClassLoader().loadClass(name);
+                Constructor clazzConstructor = clazz.getConstructor();
+                listeners.add((CommandListener) clazzConstructor.newInstance());
+            } catch (Exception e) {
+                LOGGER.warnf(e, "Unable to load the command listener class %s", name);
+            }
+        }
+
+        return listeners;
     }
 
     @PreDestroy
