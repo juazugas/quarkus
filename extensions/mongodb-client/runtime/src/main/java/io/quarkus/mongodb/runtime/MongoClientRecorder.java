@@ -21,8 +21,9 @@ import io.quarkus.runtime.annotations.Recorder;
 @Recorder
 public class MongoClientRecorder {
 
-    public Supplier<MongoClientSupport> mongoClientSupportSupplier(List<String> codecProviders, List<String> bsonDiscriminators, List<String> commandListeners,
-            List<Supplier<ConnectionPoolListener>> connectionPoolListenerSuppliers, boolean disableSslSupport) {
+    public Supplier<MongoClientSupport> mongoClientSupportSupplier(List<String> codecProviders, List<String> bsonDiscriminators,
+            List<String> commandListeners, List<Supplier<ConnectionPoolListener>> connectionPoolListenerSuppliers,
+            boolean disableSslSupport) {
         return new Supplier<MongoClientSupport>() {
             @Override
             public MongoClientSupport get() {
