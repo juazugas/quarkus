@@ -39,8 +39,8 @@ public class MongoCommandListenerTest extends MongoTestBase {
     @Test
     void testClientInitialization() {
         assertThat(client.listDatabaseNames().first()).isNotEmpty();
-        assertThat(MockCommandListener.events, hasSize(1));
-        assertThat(MockCommandListener.events, hasItems(equalTo("listDatabases")));
+        assertThat(MockCommandListener.EVENTS, hasSize(1));
+        assertThat(MockCommandListener.EVENTS, hasItems(equalTo("listDatabases")));
     }
 
 }

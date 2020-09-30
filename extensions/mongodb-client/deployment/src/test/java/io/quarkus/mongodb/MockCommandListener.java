@@ -8,11 +8,11 @@ import com.mongodb.event.CommandStartedEvent;
 
 public class MockCommandListener implements CommandListener {
 
-    public static final List<String> events = new ArrayList<>();
+    public static final List<String> EVENTS = new ArrayList<>();
 
     @Override
     public void commandStarted(CommandStartedEvent startedEvent) {
-        events.add(startedEvent.getCommandName());
+        EVENTS.add(startedEvent.getCommandName());
     }
 
 }
