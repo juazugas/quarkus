@@ -1,6 +1,10 @@
 package io.quarkus.mongodb;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.hasItems;
+import static org.hamcrest.Matchers.hasSize;
 
 import javax.inject.Inject;
 
@@ -35,6 +39,8 @@ public class MongoCommandListenerTest extends MongoTestBase {
     @Test
     void testClientInitialization() {
         assertThat(client.listDatabaseNames().first()).isNotEmpty();
+        assertThat(MockCommandListener.events, hasSize(1));
+        assertThat(MockCommandListener.events, hasItems(equalTo("listDatabases")));
     }
 
 }
