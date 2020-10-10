@@ -82,22 +82,20 @@ public class MongoClientProcessor {
         return new BsonDiscriminatorBuildItem(names);
     }
 
-    @BuildStep
-    CommandListenerBuildItem collectCommandListeners(CombinedIndexBuildItem indexBuildItem) {
+    private List<String> collectCommandListenersClassNames(CombinedIndexBuildItem indexBuildItem) {
         Collection<ClassInfo> commandListenerClasses = indexBuildItem.getIndex()
                 .getAllKnownImplementors(DotName.createSimple(CommandListener.class.getName()));
-        List<String> names = commandListenerClasses.stream().map(ci -> ci.name().toString()).collect(Collectors.toList());
-        return new CommandListenerBuildItem(names);
+        return commandListenerClasses.stream().map(ci -> ci.name().toString()).collect(Collectors.toList());
     }
 
     @BuildStep
     List<ReflectiveClassBuildItem> addCodecsAndDiscriminatorsAndListenersToNative(CodecProviderBuildItem codecProviders,
             BsonDiscriminatorBuildItem bsonDiscriminators,
-            CommandListenerBuildItem commandListeners) {
+            CombinedIndexBuildItem indexBuildItem) {
         List<String> reflectiveClassNames = new ArrayList<>();
         reflectiveClassNames.addAll(codecProviders.getCodecProviderClassNames());
         reflectiveClassNames.addAll(bsonDiscriminators.getBsonDiscriminatorClassNames());
-        reflectiveClassNames.addAll(commandListeners.getCommandListenerClassNames());
+        reflectiveClassNames.addAll(collectCommandListenersClassNames(indexBuildItem));
 
         return reflectiveClassNames.stream()
                 .map(s -> new ReflectiveClassBuildItem(true, true, false, s))
@@ -160,7 +158,7 @@ public class MongoClientProcessor {
             SslNativeConfigBuildItem sslNativeConfig,
             CodecProviderBuildItem codecProvider,
             BsonDiscriminatorBuildItem bsonDiscriminator,
-            CommandListenerBuildItem commandListener,
+            CombinedIndexBuildItem indexBuildItem,
             List<MongoConnectionPoolListenerBuildItem> connectionPoolListenerProvider,
             BuildProducer<MongoConnectionNameBuildItem> mongoConnections,
             BuildProducer<SyntheticBeanBuildItem> syntheticBeanBuildItemBuildProducer,
@@ -183,7 +181,7 @@ public class MongoClientProcessor {
         syntheticBeanBuildItemBuildProducer.produce(SyntheticBeanBuildItem.configure(MongoClientSupport.class)
                 .scope(Singleton.class)
                 .supplier(recorder.mongoClientSupportSupplier(codecProvider.getCodecProviderClassNames(),
-                        bsonDiscriminator.getBsonDiscriminatorClassNames(), commandListener.getCommandListenerClassNames(),
+                        bsonDiscriminator.getBsonDiscriminatorClassNames(), collectCommandListenersClassNames(indexBuildItem),
                         poolListenerList, sslNativeConfig.isExplicitlyDisabled()))
                 .done());
 
