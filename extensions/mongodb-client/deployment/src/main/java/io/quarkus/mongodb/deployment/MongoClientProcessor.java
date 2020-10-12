@@ -91,7 +91,7 @@ public class MongoClientProcessor {
     }
 
     @BuildStep
-    List<ReflectiveClassBuildItem> addCodecsAndDiscriminatorsAndListenersToNative(CodecProviderBuildItem codecProviders,
+    List<ReflectiveClassBuildItem> addExtensionPointsToNative(CodecProviderBuildItem codecProviders,
             BsonDiscriminatorBuildItem bsonDiscriminators,
             CommandListenerBuildItem commandListeners) {
         List<String> reflectiveClassNames = new ArrayList<>();

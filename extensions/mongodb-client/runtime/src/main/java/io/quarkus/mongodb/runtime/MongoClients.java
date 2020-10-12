@@ -391,7 +391,7 @@ public class MongoClients {
         List<CommandListener> listeners = new ArrayList<>();
         for (String name : classNames) {
             try {
-                Class<?> clazz = Thread.currentThread().getContextClassLoader().loadClass(name);
+                Class<?> clazz = Class.forName(name);
                 Constructor clazzConstructor = clazz.getConstructor();
                 listeners.add((CommandListener) clazzConstructor.newInstance());
             } catch (Exception e) {
