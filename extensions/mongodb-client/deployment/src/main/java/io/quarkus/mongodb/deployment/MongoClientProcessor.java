@@ -9,6 +9,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
@@ -35,6 +36,8 @@ import io.quarkus.arc.deployment.SyntheticBeanBuildItem;
 import io.quarkus.arc.processor.BuildExtension;
 import io.quarkus.arc.processor.DotNames;
 import io.quarkus.arc.processor.InjectionPointInfo;
+import io.quarkus.deployment.Capabilities;
+import io.quarkus.deployment.Capability;
 import io.quarkus.deployment.Feature;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
@@ -55,6 +58,7 @@ import io.quarkus.mongodb.runtime.MongoClientRecorder;
 import io.quarkus.mongodb.runtime.MongoClientSupport;
 import io.quarkus.mongodb.runtime.MongoClients;
 import io.quarkus.mongodb.runtime.MongodbConfig;
+import io.quarkus.mongodb.tracing.MongoTracingCommandListener;
 import io.quarkus.runtime.metrics.MetricsFactory;
 import io.quarkus.smallrye.health.deployment.spi.HealthBuildItem;
 
@@ -65,6 +69,15 @@ public class MongoClientProcessor {
 
     private static final DotName MONGO_CLIENT = DotName.createSimple(MongoClient.class.getName());
     private static final DotName REACTIVE_MONGO_CLIENT = DotName.createSimple(ReactiveMongoClient.class.getName());
+
+    static class MongoClientTracingEnabled implements BooleanSupplier {
+        MongoClientBuildTimeConfig mConfig;
+
+        @Override
+        public boolean getAsBoolean() {
+            return mConfig.tracingEnabled;
+        }
+    }
 
     @BuildStep
     CodecProviderBuildItem collectCodecProviders(CombinedIndexBuildItem indexBuildItem) {
@@ -93,10 +106,16 @@ public class MongoClientProcessor {
     }
 
     @BuildStep
-    CommandListenerBuildItem collectCommandListeners(CombinedIndexBuildItem indexBuildItem) {
+    CommandListenerBuildItem collectCommandListeners(CombinedIndexBuildItem indexBuildItem,
+            MongoClientBuildTimeConfig buildTimeConfig, Capabilities capabilities) {
         Collection<ClassInfo> commandListenerClasses = indexBuildItem.getIndex()
                 .getAllKnownImplementors(DotName.createSimple(CommandListener.class.getName()));
-        List<String> names = commandListenerClasses.stream().map(ci -> ci.name().toString()).collect(Collectors.toList());
+        List<String> names = commandListenerClasses.stream()
+                .map(ci -> ci.name().toString())
+                .collect(Collectors.toList());
+        if (buildTimeConfig.tracingEnabled && capabilities.isPresent(Capability.OPENTRACING)) {
+            names.add(MongoTracingCommandListener.class.getName());
+        }
         return new CommandListenerBuildItem(names);
     }
 
