@@ -61,7 +61,7 @@ public class MongoTracingCommandListenerTest extends MongoTestBase {
 
     @Test
     void testClientInitialization() {
-        assertThat(mockTracer.finishedSpans()).hasSize(0);
+        assertThat(mockTracer.finishedSpans()).isEmpty();
 
         assertThat(client.listDatabaseNames().first()).isNotEmpty();
 

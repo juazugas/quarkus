@@ -10,7 +10,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.BooleanSupplier;
-import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
@@ -49,7 +48,6 @@ import io.quarkus.deployment.builditem.ApplicationArchivesBuildItem;
 import io.quarkus.deployment.builditem.CombinedIndexBuildItem;
 import io.quarkus.deployment.builditem.ExtensionSslNativeSupportBuildItem;
 import io.quarkus.deployment.builditem.FeatureBuildItem;
-import io.quarkus.deployment.builditem.IndexDependencyBuildItem;
 import io.quarkus.deployment.builditem.SslNativeConfigBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.deployment.metrics.MetricsCapabilityBuildItem;
@@ -81,11 +79,6 @@ public class MongoClientProcessor {
         }
     }
 
-    @BuildStep(onlyIf = MongoClientTracingEnabled.class)
-    IndexDependencyBuildItem addMongoTracingDependencies() {
-        return new IndexDependencyBuildItem("io.opentracing.contrib", "opentracing-mongo-common");
-    }
-
     @BuildStep
     CodecProviderBuildItem collectCodecProviders(CombinedIndexBuildItem indexBuildItem) {
         Collection<ClassInfo> codecProviderClasses = indexBuildItem.getIndex()
@@ -113,16 +106,12 @@ public class MongoClientProcessor {
     }
 
     @BuildStep
-    CommandListenerBuildItem collectCommandListeners(CombinedIndexBuildItem indexBuildItem, Capabilities capabilities,
-            MongoClientBuildTimeConfig buildTimeConfig) {
-        Predicate<String> isTracingCommandListenerPredicate = name -> name
-                .equalsIgnoreCase("io.opentracing.contrib.mongo.common.TracingCommandListener");
+    CommandListenerBuildItem collectCommandListeners(CombinedIndexBuildItem indexBuildItem,
+            MongoClientBuildTimeConfig buildTimeConfig, Capabilities capabilities) {
         Collection<ClassInfo> commandListenerClasses = indexBuildItem.getIndex()
                 .getAllKnownImplementors(DotName.createSimple(CommandListener.class.getName()));
         List<String> names = commandListenerClasses.stream()
                 .map(ci -> ci.name().toString())
-                // filter the TracingCommandListener to avoid the non-default constructor class.
-                .filter(isTracingCommandListenerPredicate.negate())
                 .collect(Collectors.toList());
         if (buildTimeConfig.tracingEnabled && capabilities.isPresent(Capability.OPENTRACING)) {
             names.add(MongoTracingCommandListener.class.getName());
