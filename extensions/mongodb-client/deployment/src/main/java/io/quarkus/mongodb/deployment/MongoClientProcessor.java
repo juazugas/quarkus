@@ -9,7 +9,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
-import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
@@ -58,26 +57,17 @@ import io.quarkus.mongodb.runtime.MongoClientRecorder;
 import io.quarkus.mongodb.runtime.MongoClientSupport;
 import io.quarkus.mongodb.runtime.MongoClients;
 import io.quarkus.mongodb.runtime.MongodbConfig;
-import io.quarkus.mongodb.tracing.MongoTracingCommandListener;
 import io.quarkus.runtime.metrics.MetricsFactory;
 import io.quarkus.smallrye.health.deployment.spi.HealthBuildItem;
 
 public class MongoClientProcessor {
+    private static final String MONGODB_TRACING_COMMANDLISTENER_CLASSNAME = "io.quarkus.mongodb.tracing.MongoTracingCommandListener";
     private static final DotName LEGACY_MONGO_CLIENT_ANNOTATION = DotName
             .createSimple(io.quarkus.mongodb.runtime.MongoClientName.class.getName());
     private static final DotName MONGO_CLIENT_ANNOTATION = DotName.createSimple(MongoClientName.class.getName());
 
     private static final DotName MONGO_CLIENT = DotName.createSimple(MongoClient.class.getName());
     private static final DotName REACTIVE_MONGO_CLIENT = DotName.createSimple(ReactiveMongoClient.class.getName());
-
-    static class MongoClientTracingEnabled implements BooleanSupplier {
-        MongoClientBuildTimeConfig mConfig;
-
-        @Override
-        public boolean getAsBoolean() {
-            return mConfig.tracingEnabled;
-        }
-    }
 
     @BuildStep
     CodecProviderBuildItem collectCodecProviders(CombinedIndexBuildItem indexBuildItem) {
@@ -114,7 +104,7 @@ public class MongoClientProcessor {
                 .map(ci -> ci.name().toString())
                 .collect(Collectors.toList());
         if (buildTimeConfig.tracingEnabled && capabilities.isPresent(Capability.OPENTRACING)) {
-            names.add(MongoTracingCommandListener.class.getName());
+            names.add(MONGODB_TRACING_COMMANDLISTENER_CLASSNAME);
         }
         return new CommandListenerBuildItem(names);
     }

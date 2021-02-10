@@ -599,9 +599,9 @@ When using link:microprofile-metrics[SmallRye Metrics], connection pool metrics 
 == Tracing
 
 If you are using the `quarkus-smallrye-opentracing` extension, `quarkus-mongodb-client` can register traces about the commands executed.
-This behavior must be enabled by setting the `quarkus.mongodb.tracing.enabled` property to `true` in your `application.properties` and adding the dependency `io.opentracing.contrib:opentracing-mongo-common` to your pom.xml (for more info read the link:opentracing#mongodb-client[MongoDB client])
+This behavior must be enabled by setting the `quarkus.mongodb.tracing.enabled` property to `true` in your `application.properties` and adding the dependency `io.opentracing.contrib:opentracing-mongo-common` to your pom.xml (for more info read the link:opentracing#mongodb-client[OpenTracing - MongoDB client] section).
 
-Read the link:opentracing[OpenTracing] guide, to configure and how to use the jaeger tracer.
+Read the link:opentracing[OpenTracing] guide, for how to configure OpenTracing and how to use the Jaeger tracer.
 
 == The legacy client
 
