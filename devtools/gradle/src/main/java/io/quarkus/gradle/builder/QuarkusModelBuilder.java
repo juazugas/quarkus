@@ -26,6 +26,7 @@ import java.util.stream.Collectors;
 import org.gradle.api.GradleException;
 import org.gradle.api.Project;
 import org.gradle.api.Task;
+import org.gradle.api.UnknownDomainObjectException;
 import org.gradle.api.artifacts.Configuration;
 import org.gradle.api.artifacts.ExternalModuleDependency;
 import org.gradle.api.artifacts.ModuleDependency;
@@ -35,6 +36,7 @@ import org.gradle.api.artifacts.ResolvedConfiguration;
 import org.gradle.api.artifacts.ResolvedDependency;
 import org.gradle.api.artifacts.component.ProjectComponentIdentifier;
 import org.gradle.api.attributes.Category;
+import org.gradle.api.initialization.IncludedBuild;
 import org.gradle.api.internal.artifacts.dependencies.DefaultDependencyArtifact;
 import org.gradle.api.internal.artifacts.dependencies.DefaultExternalModuleDependency;
 import org.gradle.api.plugins.Convention;
@@ -64,6 +66,9 @@ import io.quarkus.runtime.LaunchMode;
 import io.quarkus.runtime.util.HashUtil;
 
 public class QuarkusModelBuilder implements ParameterizedToolingModelBuilder<ModelParameter> {
+
+    private static final String MAIN_RESOURCES_OUTPUT = "build/resources/main";
+    private static final String CLASSES_OUTPUT = "build/classes";
 
     private static Configuration classpathConfig(Project project, LaunchMode mode) {
         if (LaunchMode.TEST.equals(mode)) {
@@ -103,9 +108,9 @@ public class QuarkusModelBuilder implements ParameterizedToolingModelBuilder<Mod
         final Map<ArtifactCoords, Dependency> appDependencies = new LinkedHashMap<>();
         final Set<ArtifactCoords> visitedDeps = new HashSet<>();
 
-        final ResolvedConfiguration configuration = classpathConfig(project, mode).getResolvedConfiguration();
-        collectDependencies(configuration, mode, project, appDependencies);
-        collectFirstMetDeploymentDeps(configuration.getFirstLevelModuleDependencies(), appDependencies,
+        final ResolvedConfiguration resolvedConfiguration = classpathConfig(project, mode).getResolvedConfiguration();
+        collectDependencies(resolvedConfiguration, mode, project, appDependencies);
+        collectFirstMetDeploymentDeps(resolvedConfiguration.getFirstLevelModuleDependencies(), appDependencies,
                 deploymentDeps, visitedDeps);
 
         final List<Dependency> extensionDependencies = collectExtensionDependencies(project, deploymentDeps);
@@ -113,7 +118,8 @@ public class QuarkusModelBuilder implements ParameterizedToolingModelBuilder<Mod
         ArtifactCoords appArtifactCoords = new ArtifactCoordsImpl(project.getGroup().toString(), project.getName(),
                 project.getVersion().toString());
 
-        return new QuarkusModelImpl(new WorkspaceImpl(appArtifactCoords, getWorkspace(project.getRootProject(), mode)),
+        return new QuarkusModelImpl(
+                new WorkspaceImpl(appArtifactCoords, getWorkspace(project.getRootProject(), mode, appArtifactCoords)),
                 new LinkedList<>(appDependencies.values()),
                 extensionDependencies,
                 deploymentDeps.stream().map(QuarkusModelBuilder::toEnforcedPlatformDependency)
@@ -188,7 +194,7 @@ public class QuarkusModelBuilder implements ParameterizedToolingModelBuilder<Mod
         return platformProps;
     }
 
-    public Set<WorkspaceModule> getWorkspace(Project project, LaunchMode mode) {
+    public Set<WorkspaceModule> getWorkspace(Project project, LaunchMode mode, ArtifactCoords mainModuleCoord) {
         Set<WorkspaceModule> modules = new HashSet<>();
         for (Project subproject : project.getAllprojects()) {
             final Convention convention = subproject.getConvention();
@@ -196,18 +202,30 @@ public class QuarkusModelBuilder implements ParameterizedToolingModelBuilder<Mod
             if (javaConvention == null || !javaConvention.getSourceSets().getNames().contains(SourceSet.MAIN_SOURCE_SET_NAME)) {
                 continue;
             }
-            modules.add(getWorkspaceModule(subproject, mode));
+            if (subproject.getName().equals(mainModuleCoord.getArtifactId())
+                    && subproject.getGroup().equals(mainModuleCoord.getGroupId())) {
+                modules.add(getWorkspaceModule(subproject, mode, true));
+            } else {
+                modules.add(getWorkspaceModule(subproject, mode, false));
+            }
+
         }
         return modules;
     }
 
-    private WorkspaceModule getWorkspaceModule(Project project, LaunchMode mode) {
+    private WorkspaceModule getWorkspaceModule(Project project, LaunchMode mode, boolean isMainModule) {
         ArtifactCoords appArtifactCoords = new ArtifactCoordsImpl(project.getGroup().toString(), project.getName(),
                 project.getVersion().toString());
         final SourceSet mainSourceSet = QuarkusGradleUtils.getSourceSet(project, SourceSet.MAIN_SOURCE_SET_NAME);
         final SourceSetImpl modelSourceSet = convert(mainSourceSet);
-        return new WorkspaceModuleImpl(appArtifactCoords, project.getProjectDir().getAbsoluteFile(),
+        WorkspaceModuleImpl workspaceModule = new WorkspaceModuleImpl(appArtifactCoords,
+                project.getProjectDir().getAbsoluteFile(),
                 project.getBuildDir().getAbsoluteFile(), getSourceSourceSet(mainSourceSet), modelSourceSet);
+        if (isMainModule && mode == LaunchMode.TEST) {
+            final SourceSet testSourceSet = QuarkusGradleUtils.getSourceSet(project, SourceSet.TEST_SOURCE_SET_NAME);
+            workspaceModule.getSourceSet().getSourceDirectories().addAll(testSourceSet.getOutput().getClassesDirs().getFiles());
+        }
+        return workspaceModule;
     }
 
     private List<org.gradle.api.artifacts.Dependency> getEnforcedPlatforms(Project project) {
@@ -317,8 +335,10 @@ public class QuarkusModelBuilder implements ParameterizedToolingModelBuilder<Mod
 
     private void collectDependencies(ResolvedConfiguration configuration,
             LaunchMode mode, Project project, Map<ArtifactCoords, Dependency> appDependencies) {
+
         final Set<ResolvedArtifact> artifacts = configuration.getResolvedArtifacts();
         Set<File> artifactFiles = null;
+
         // if the number of artifacts is less than the number of files then probably
         // the project includes direct file dependencies
         if (artifacts.size() < configuration.getFiles().size()) {
@@ -331,9 +351,14 @@ public class QuarkusModelBuilder implements ParameterizedToolingModelBuilder<Mod
             final DependencyImpl dep = initDependency(a);
             if (LaunchMode.DEVELOPMENT.equals(mode) &&
                     a.getId().getComponentIdentifier() instanceof ProjectComponentIdentifier) {
-                Project projectDep = project.getRootProject()
-                        .findProject(((ProjectComponentIdentifier) a.getId().getComponentIdentifier()).getProjectPath());
-                addDevModePaths(dep, a, projectDep);
+                IncludedBuild includedBuild = includedBuild(project, a.getName());
+                if (includedBuild != null) {
+                    addSubstitutedProject(dep, includedBuild.getProjectDir());
+                } else {
+                    Project projectDep = project.getRootProject()
+                            .findProject(((ProjectComponentIdentifier) a.getId().getComponentIdentifier()).getProjectPath());
+                    addDevModePaths(dep, a, projectDep);
+                }
             } else {
                 dep.addPath(a.getFile());
             }
@@ -399,6 +424,36 @@ public class QuarkusModelBuilder implements ParameterizedToolingModelBuilder<Mod
             if (outputDir.exists()) {
                 dep.addPath(outputDir);
             }
+        }
+    }
+
+    private void addSubstitutedProject(final DependencyImpl dep, File projectFile) {
+        File mainResourceDirectory = new File(projectFile, MAIN_RESOURCES_OUTPUT);
+        if (mainResourceDirectory.exists()) {
+            dep.addPath(mainResourceDirectory);
+        }
+        File classesOutput = new File(projectFile, CLASSES_OUTPUT);
+        File[] languageDirectories = classesOutput.listFiles();
+        if (languageDirectories == null) {
+            throw new GradleException(
+                    "The project does not contain a class output directory. " + classesOutput.getPath() + " must exist.");
+        }
+        for (File languageDirectory : languageDirectories) {
+            if (languageDirectory.isDirectory()) {
+                for (File sourceSet : languageDirectory.listFiles()) {
+                    if (sourceSet.isDirectory() && sourceSet.getName().equals(SourceSet.MAIN_SOURCE_SET_NAME)) {
+                        dep.addPath(sourceSet);
+                    }
+                }
+            }
+        }
+    }
+
+    private IncludedBuild includedBuild(final Project project, final String projectName) {
+        try {
+            return project.getGradle().includedBuild(projectName);
+        } catch (UnknownDomainObjectException ignore) {
+            return null;
         }
     }
 

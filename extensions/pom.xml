@@ -33,7 +33,7 @@
         <module>vertx-core</module>
         <module>vertx-http</module>
         <module>undertow</module>
-        <module>undertow-websockets</module>
+        <module>websockets</module>
         <module>webjars-locator</module>
         <module>resteasy-reactive</module>
 
@@ -111,6 +111,7 @@
         <module>artemis-core</module>
         <module>artemis-jms</module>
         <module>avro</module>
+        <module>devservices</module>
 
         <!-- Spring -->
         <module>spring-di</module>
@@ -152,9 +153,10 @@
         <!-- Integrations -->
         <module>amazon-lambda</module>
         <module>amazon-lambda-xray</module>
+        <!-- AWS API Gateway HTTP API -->
         <module>amazon-lambda-http</module>
-        <!-- amazon-lambda-http-v1 is deprecated -->
-        <module>amazon-lambda-http-v1</module>
+        <!-- AWS API Gateway REST API -->
+        <module>amazon-lambda-rest</module>
         <module>amazon-services</module>
         <module>amazon-alexa</module>
         <module>azure-functions-http</module>

@@ -1,10 +1,12 @@
 package io.quarkus.oidc.client.runtime;
 
 import java.io.IOException;
+import java.net.ConnectException;
 import java.net.URI;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.CompletionException;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -35,6 +37,7 @@ public class OidcClientRecorder {
 
     private static final Logger LOG = Logger.getLogger(OidcClientRecorder.class);
     private static final String DEFAULT_OIDC_CLIENT_ID = "Default";
+    private static final Duration CONNECTION_BACKOFF_DURATION = Duration.ofSeconds(2);
 
     public OidcClients setup(OidcClientsConfig oidcClientsConfig, TlsConfig tlsConfig, Supplier<Vertx> vertx) {
 
@@ -94,7 +97,7 @@ public class OidcClientRecorder {
             oidcConfig.setId(oidcClientId);
         }
 
-        OidcCommonUtils.verifyCommonConfiguration(oidcConfig);
+        OidcCommonUtils.verifyCommonConfiguration(oidcConfig, false);
 
         String authServerUriString = OidcCommonUtils.getAuthServerUrl(oidcConfig);
 
@@ -112,36 +115,43 @@ public class OidcClientRecorder {
         } else {
             tokenRequestUriUni = discoverTokenRequestUri(client, authServerUri.toString(), oidcConfig);
         }
-        return tokenRequestUriUni.onItem().transform(new Function<String, OidcClient>() {
+        return tokenRequestUriUni.onItemOrFailure()
+                .transform(new BiFunction<String, Throwable, OidcClient>() {
 
-            @Override
-            public OidcClient apply(String tokenRequestUri) {
-                if (tokenRequestUri == null) {
-                    throw new ConfigurationException(
-                            "OpenId Connect Provider token endpoint URL is not configured and can not be discovered");
-                }
-                MultiMap tokenGrantParams = new MultiMap(io.vertx.core.MultiMap.caseInsensitiveMultiMap());
+                    @Override
+                    public OidcClient apply(String tokenRequestUri, Throwable t) {
+                        if (t != null) {
+                            throw toOidcClientException(authServerUri.toString(), t);
+                        }
 
-                String grantType = oidcConfig.grant.getType() == Grant.Type.CLIENT
-                        ? OidcConstants.CLIENT_CREDENTIALS_GRANT
-                        : OidcConstants.PASSWORD_GRANT;
-                setGrantClientParams(oidcConfig, tokenGrantParams, grantType);
+                        if (tokenRequestUri == null) {
+                            throw new ConfigurationException(
+                                    "OpenId Connect Provider token endpoint URL is not configured and can not be discovered");
+                        }
+                        MultiMap tokenGrantParams = new MultiMap(io.vertx.core.MultiMap.caseInsensitiveMultiMap());
 
-                if (oidcConfig.grant.getType() == Grant.Type.PASSWORD) {
-                    Map<String, String> passwordGrantOptions = oidcConfig.getGrantOptions().get(OidcConstants.PASSWORD_GRANT);
-                    tokenGrantParams.add(OidcConstants.PASSWORD_GRANT_USERNAME,
-                            passwordGrantOptions.get(OidcConstants.PASSWORD_GRANT_USERNAME));
-                    tokenGrantParams.add(OidcConstants.PASSWORD_GRANT_PASSWORD,
-                            passwordGrantOptions.get(OidcConstants.PASSWORD_GRANT_PASSWORD));
-                }
+                        String grantType = oidcConfig.grant.getType() == Grant.Type.CLIENT
+                                ? OidcConstants.CLIENT_CREDENTIALS_GRANT
+                                : OidcConstants.PASSWORD_GRANT;
+                        setGrantClientParams(oidcConfig, tokenGrantParams, grantType);
 
-                MultiMap commonRefreshGrantParams = new MultiMap(io.vertx.core.MultiMap.caseInsensitiveMultiMap());
-                setGrantClientParams(oidcConfig, commonRefreshGrantParams, OidcConstants.REFRESH_TOKEN_GRANT);
+                        if (oidcConfig.grant.getType() == Grant.Type.PASSWORD) {
+                            Map<String, String> passwordGrantOptions = oidcConfig.getGrantOptions()
+                                    .get(OidcConstants.PASSWORD_GRANT);
+                            tokenGrantParams.add(OidcConstants.PASSWORD_GRANT_USERNAME,
+                                    passwordGrantOptions.get(OidcConstants.PASSWORD_GRANT_USERNAME));
+                            tokenGrantParams.add(OidcConstants.PASSWORD_GRANT_PASSWORD,
+                                    passwordGrantOptions.get(OidcConstants.PASSWORD_GRANT_PASSWORD));
+                        }
 
-                return new OidcClientImpl(client, tokenRequestUri, grantType, tokenGrantParams, commonRefreshGrantParams,
-                        oidcConfig);
-            }
-        });
+                        MultiMap commonRefreshGrantParams = new MultiMap(io.vertx.core.MultiMap.caseInsensitiveMultiMap());
+                        setGrantClientParams(oidcConfig, commonRefreshGrantParams, OidcConstants.REFRESH_TOKEN_GRANT);
+
+                        return new OidcClientImpl(client, tokenRequestUri, grantType, tokenGrantParams,
+                                commonRefreshGrantParams,
+                                oidcConfig);
+                    }
+                });
     }
 
     private static void setGrantClientParams(OidcClientConfig oidcConfig, MultiMap grantParams, String grantType) {
@@ -157,41 +167,12 @@ public class OidcClientRecorder {
     }
 
     private static Uni<String> discoverTokenRequestUri(WebClient client, String authServerUrl, OidcClientConfig oidcConfig) {
+        final String discoveryUrl = authServerUrl + "/.well-known/openid-configuration";
         final long connectionRetryCount = OidcCommonUtils.getConnectionRetryCount(oidcConfig);
+        final long expireInDelay = OidcCommonUtils.getConnectionDelayInMillis(oidcConfig);
         if (connectionRetryCount > 1) {
             LOG.infof("Connecting to IDP for up to %d times every 2 seconds", connectionRetryCount);
         }
-
-        for (long i = 0; i < connectionRetryCount; i++) {
-            try {
-                if (oidcConfig.discoveryEnabled) {
-                    return discoverTokenEndpoint(client, authServerUrl);
-                }
-                break;
-            } catch (Throwable throwable) {
-                while (throwable instanceof CompletionException && throwable.getCause() != null) {
-                    throwable = throwable.getCause();
-                }
-                if (throwable instanceof OidcClientException) {
-                    if (i + 1 < connectionRetryCount) {
-                        try {
-                            Thread.sleep(2000);
-                        } catch (InterruptedException iex) {
-                            // continue connecting
-                        }
-                    } else {
-                        throw (OidcClientException) throwable;
-                    }
-                } else {
-                    throw new OidcClientException(throwable);
-                }
-            }
-        }
-        return Uni.createFrom().nullItem();
-    }
-
-    private static Uni<String> discoverTokenEndpoint(WebClient client, String authServerUrl) {
-        String discoveryUrl = authServerUrl + "/.well-known/openid-configuration";
         return client.getAbs(discoveryUrl).send().onItem().transform(resp -> {
             if (resp.statusCode() == 200) {
                 JsonObject json = resp.bodyAsJsonObject();
@@ -200,7 +181,10 @@ public class OidcClientRecorder {
                 LOG.tracef("Discovery has failed, status code: %d", resp.statusCode());
                 return null;
             }
-        });
+        }).onFailure(ConnectException.class)
+                .retry()
+                .withBackOff(CONNECTION_BACKOFF_DURATION, CONNECTION_BACKOFF_DURATION)
+                .expireIn(expireInDelay);
     }
 
     protected static OidcClientException toOidcClientException(String authServerUrlString, Throwable cause) {

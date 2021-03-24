@@ -29,18 +29,15 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import org.eclipse.microprofile.config.ConfigProvider;
-import org.jboss.jandex.AnnotationInstance;
-import org.jboss.jandex.AnnotationTarget;
 import org.jboss.jandex.ClassInfo;
-import org.jboss.jandex.DotName;
 import org.jboss.jandex.Index;
 import org.jboss.jandex.IndexView;
 import org.jboss.jandex.Indexer;
-import org.jboss.jandex.MethodParameterInfo;
 import org.jboss.logging.Logger;
 
 import io.quarkus.bootstrap.runner.Timing;
@@ -50,17 +47,12 @@ import io.quarkus.deployment.util.FileUtil;
 import io.quarkus.dev.spi.DevModeType;
 import io.quarkus.dev.spi.HotReplacementContext;
 import io.quarkus.dev.spi.HotReplacementSetup;
-import io.quarkus.runtime.Startup;
-import io.quarkus.runtime.StartupEvent;
 
 public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable {
 
     private static final Logger log = Logger.getLogger(RuntimeUpdatesProcessor.class);
 
     private static final String CLASS_EXTENSION = ".class";
-    private static final DotName STARTUP_NAME = DotName.createSimple(Startup.class.getName());
-    private static final DotName STARTUP_EVENT_NAME = DotName.createSimple(StartupEvent.class.getName());
-    private static final DotName OBSERVES_NAME = DotName.createSimple("javax.enterprise.event.Observes");
 
     static volatile RuntimeUpdatesProcessor INSTANCE;
 
@@ -72,6 +64,9 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
 
     // file path -> isRestartNeeded
     private volatile Map<String, Boolean> watchedFilePaths = Collections.emptyMap();
+
+    private volatile Predicate<ClassInfo> disableInstrumentationForClassPredicate = new AlwaysFalsePredicate<>();
+    private volatile Predicate<Index> disableInstrumentationForIndexPredicate = new AlwaysFalsePredicate<>();
 
     /**
      * A first scan is considered done when we have visited all modules at least once.
@@ -123,7 +118,7 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
     public Path getClassesDir() {
         //TODO: fix all these
         for (DevModeContext.ModuleInfo i : context.getAllModules()) {
-            return Paths.get(i.getResourcePath());
+            return Paths.get(i.getClassesPath());
         }
         return null;
     }
@@ -203,11 +198,14 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
         boolean configFileRestartNeeded = filesChanged.stream().map(watchedFilePaths::get).anyMatch(Boolean.TRUE::equals);
 
         boolean instrumentationChange = false;
-        if (ClassChangeAgent.getInstrumentation() != null && lastStartIndex != null && !configFileRestartNeeded) {
+        if (ClassChangeAgent.getInstrumentation() != null && lastStartIndex != null && !configFileRestartNeeded
+                && devModeType != DevModeType.REMOTE_LOCAL_SIDE) {
             //attempt to do an instrumentation based reload
             //if only code has changed and not the class structure, then we can do a reload
             //using the JDK instrumentation API (assuming we were started with the javaagent)
-            if (changedClassResults.deletedClasses.isEmpty() && !changedClassResults.changedClasses.isEmpty()) {
+            if (changedClassResults.deletedClasses.isEmpty()
+                    && changedClassResults.addedClasses.isEmpty()
+                    && !changedClassResults.changedClasses.isEmpty()) {
                 try {
                     Indexer indexer = new Indexer();
                     //attempt to use the instrumentation API
@@ -221,11 +219,12 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
                     }
                     Index current = indexer.complete();
                     boolean ok = instrumentationEnabled()
-                            && !containsStartupCode(current);
+                            && !disableInstrumentationForIndexPredicate.test(current);
                     if (ok) {
                         for (ClassInfo clazz : current.getKnownClasses()) {
                             ClassInfo old = lastStartIndex.getClassByName(clazz.name());
-                            if (!ClassComparisonUtil.isSameStructure(clazz, old)) {
+                            if (!ClassComparisonUtil.isSameStructure(clazz, old)
+                                    || disableInstrumentationForClassPredicate.test(clazz)) {
                                 ok = false;
                                 break;
                             }
@@ -277,29 +276,10 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
         try {
             Thread.currentThread().setContextClassLoader(getClass().getClassLoader());
             return ConfigProvider.getConfig()
-                    .getOptionalValue("quarkus.dev.instrumentation", boolean.class).orElse(true);
+                    .getOptionalValue("quarkus.live-reload.instrumentation", boolean.class).orElse(true);
         } finally {
             Thread.currentThread().setContextClassLoader(old);
         }
-    }
-
-    private boolean containsStartupCode(Index index) {
-        if (!index.getAnnotations(STARTUP_NAME).isEmpty()) {
-            return true;
-        }
-        List<AnnotationInstance> observesInstances = index.getAnnotations(OBSERVES_NAME);
-        if (!observesInstances.isEmpty()) {
-            for (AnnotationInstance observesInstance : observesInstances) {
-                if (observesInstance.target().kind() == AnnotationTarget.Kind.METHOD_PARAMETER) {
-                    MethodParameterInfo methodParameterInfo = observesInstance.target().asMethodParameter();
-                    short paramPos = methodParameterInfo.position();
-                    if (STARTUP_EVENT_NAME.equals(methodParameterInfo.method().parameters().get(paramPos).name())) {
-                        return true;
-                    }
-                }
-            }
-        }
-        return false;
     }
 
     @Override
@@ -619,6 +599,18 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
+    }
+
+    public RuntimeUpdatesProcessor setDisableInstrumentationForClassPredicate(
+            Predicate<ClassInfo> disableInstrumentationForClassPredicate) {
+        this.disableInstrumentationForClassPredicate = disableInstrumentationForClassPredicate;
+        return this;
+    }
+
+    public RuntimeUpdatesProcessor setDisableInstrumentationForIndexPredicate(
+            Predicate<Index> disableInstrumentationForIndexPredicate) {
+        this.disableInstrumentationForIndexPredicate = disableInstrumentationForIndexPredicate;
+        return this;
     }
 
     public RuntimeUpdatesProcessor setWatchedFilePaths(Map<String, Boolean> watchedFilePaths) {

@@ -7,6 +7,7 @@ import static java.util.stream.Collectors.mapping;
 import static java.util.stream.Collectors.toList;
 import static java.util.stream.Collectors.toSet;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -29,7 +30,6 @@ import org.jboss.jandex.Type;
 import org.jboss.jandex.Type.Kind;
 
 import io.quarkus.arc.deployment.BeanRegistrationPhaseBuildItem.BeanConfiguratorBuildItem;
-import io.quarkus.arc.processor.BeanRegistrar;
 import io.quarkus.arc.processor.DotNames;
 import io.quarkus.arc.processor.InjectionPointInfo;
 import io.quarkus.arc.runtime.ConfigBeanCreator;
@@ -61,6 +61,8 @@ public class ConfigBuildStep {
     private static final DotName CONFIG_MAPPING_NAME = DotName.createSimple(ConfigMapping.class.getName());
     private static final DotName SET_NAME = DotName.createSimple(Set.class.getName());
     private static final DotName LIST_NAME = DotName.createSimple(List.class.getName());
+
+    private static final DotName CONFIG_VALUE_NAME = DotName.createSimple(io.smallrye.config.ConfigValue.class.getName());
 
     @BuildStep
     AdditionalBeanBuildItem bean() {
@@ -162,29 +164,24 @@ public class ConfigBuildStep {
     }
 
     @BuildStep
-    BeanRegistrarBuildItem registerConfigRootsAsBeans(ConfigurationBuildItem configItem) {
-        return new BeanRegistrarBuildItem(new BeanRegistrar() {
-            @Override
-            public void register(RegistrationContext context) {
-                for (RootDefinition rootDefinition : configItem.getReadResult().getAllRoots()) {
-                    if (rootDefinition.getConfigPhase() == ConfigPhase.BUILD_AND_RUN_TIME_FIXED
-                            || rootDefinition.getConfigPhase() == ConfigPhase.RUN_TIME) {
-                        Class<?> configRootClass = rootDefinition.getConfigurationClass();
-                        context.configure(configRootClass).types(configRootClass)
-                                .scope(Dependent.class).creator(mc -> {
-                                    // e.g. return Config.ApplicationConfig
-                                    ResultHandle configRoot = mc.readStaticField(rootDefinition.getDescriptor());
-                                    // BUILD_AND_RUN_TIME_FIXED roots are always set before the container is started (in the static initializer of the generated Config class)
-                                    // However, RUN_TIME roots may be not be set when the bean instance is created 
-                                    mc.ifNull(configRoot).trueBranch().throwException(CreationException.class,
-                                            String.format("Config root [%s] with config phase [%s] not initialized yet.",
-                                                    configRootClass.getName(), rootDefinition.getConfigPhase().name()));
-                                    mc.returnValue(configRoot);
-                                }).done();
-                    }
-                }
+    void registerConfigRootsAsBeans(ConfigurationBuildItem configItem, BuildProducer<SyntheticBeanBuildItem> syntheticBeans) {
+        for (RootDefinition rootDefinition : configItem.getReadResult().getAllRoots()) {
+            if (rootDefinition.getConfigPhase() == ConfigPhase.BUILD_AND_RUN_TIME_FIXED
+                    || rootDefinition.getConfigPhase() == ConfigPhase.RUN_TIME) {
+                Class<?> configRootClass = rootDefinition.getConfigurationClass();
+                syntheticBeans.produce(SyntheticBeanBuildItem.configure(configRootClass).types(configRootClass)
+                        .scope(Dependent.class).creator(mc -> {
+                            // e.g. return Config.ApplicationConfig
+                            ResultHandle configRoot = mc.readStaticField(rootDefinition.getDescriptor());
+                            // BUILD_AND_RUN_TIME_FIXED roots are always set before the container is started (in the static initializer of the generated Config class)
+                            // However, RUN_TIME roots may be not be set when the bean instance is created 
+                            mc.ifNull(configRoot).trueBranch().throwException(CreationException.class,
+                                    String.format("Config root [%s] with config phase [%s] not initialized yet.",
+                                            configRootClass.getName(), rootDefinition.getConfigPhase().name()));
+                            mc.returnValue(configRoot);
+                        }).done());
             }
-        });
+        }
     }
 
     @BuildStep
@@ -206,6 +203,7 @@ public class ConfigBuildStep {
             String prefix = Optional.ofNullable(instance.value("prefix")).map(AnnotationValue::asString).orElse("");
 
             List<ConfigMappingMetadata> configMappingsMetadata = ConfigMappingLoader.getConfigMappingsMetadata(type);
+            List<ClassInfo> mappingsInfo = new ArrayList<>();
             configMappingsMetadata.forEach(mappingMetadata -> {
                 generatedClasses.produce(
                         new GeneratedClassBuildItem(true, mappingMetadata.getClassName(), mappingMetadata.getClassBytes()));
@@ -213,7 +211,26 @@ public class ConfigBuildStep {
                         .produce(ReflectiveClassBuildItem.builder(mappingMetadata.getInterfaceType()).methods(true).build());
                 reflectiveClasses
                         .produce(ReflectiveClassBuildItem.builder(mappingMetadata.getClassName()).constructors(true).build());
+
+                ClassInfo mappingInfo = combinedIndex.getIndex()
+                        .getClassByName(DotName.createSimple(mappingMetadata.getInterfaceType().getName()));
+                if (mappingInfo != null) {
+                    mappingsInfo.add(mappingInfo);
+                }
             });
+
+            // Search and register possible classes for implicit Converter methods
+            for (ClassInfo classInfo : mappingsInfo) {
+                for (MethodInfo method : classInfo.methods()) {
+                    if (!isHandledByProducers(method.returnType()) &&
+                            mappingsInfo.stream()
+                                    .map(ClassInfo::name)
+                                    .noneMatch(name -> name.equals(method.returnType().name()))) {
+                        reflectiveClasses
+                                .produce(new ReflectiveClassBuildItem(true, false, method.returnType().name().toString()));
+                    }
+                }
+            }
 
             configMappings.produce(new ConfigMappingBuildItem(type, prefix));
 
@@ -263,7 +280,7 @@ public class ConfigBuildStep {
         return builder.append(".").append(name).toString();
     }
 
-    private boolean isHandledByProducers(Type type) {
+    public static boolean isHandledByProducers(Type type) {
         if (type.kind() == Kind.ARRAY) {
             return false;
         }
@@ -284,7 +301,8 @@ public class ConfigBuildStep {
                 DotNames.DOUBLE.equals(type.name()) ||
                 DotNames.SHORT.equals(type.name()) ||
                 DotNames.BYTE.equals(type.name()) ||
-                DotNames.CHARACTER.equals(type.name());
+                DotNames.CHARACTER.equals(type.name()) ||
+                CONFIG_VALUE_NAME.equals(type.name());
     }
 
 }

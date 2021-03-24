@@ -1,3 +1,22 @@
+var myself = $('script[src*=logstream]');
+
+// Get the non application root path
+var frameworkRootPath = myself.attr('data-frameworkRootPath');   
+if (typeof frameworkRootPath === "undefined" ) {
+    var pathname = window.location.pathname;
+    var frameworkRootPath = pathname.substr(0, pathname.indexOf('/dev/'));
+}
+// Get the streaming path
+var streamingPath = myself.attr('data-streamingPath');
+if (typeof streamingPath === "undefined" ) {
+   var streamingPath = "/dev/logstream";
+}
+// See if we should show on start
+var showOnStart = myself.attr('data-showOnStart');   
+if (typeof showOnStart === "undefined" ) {
+   var showOnStart = false;
+}
+
 var zoom = 0.90;
 var linespace = 1.00;
 var tabspace = 1;
@@ -15,7 +34,9 @@ var filter = "";
 var localstoragekey = "quarkus_logging_manager_state";
 
 $('document').ready(function () {
-    hideLog();
+    if(!showOnStart){
+        hideLog();
+    }
     loadSettings();
     
     openSocket();
@@ -482,25 +503,45 @@ function getLoggerClassName(loggerClassName){
     return "";
 }
 
-function getClassFullAbbreviatedName(sourceClassNameFull, sourceClassNameFullShort) {
+function getClassFullAbbreviatedName(sourceClassNameFull, lineNumber, sourceClassNameFullShort) {
     if($('#logstreamColumnsModalSourceClassFullAbbreviatedSwitch').is(":checked")){
-        return "<span class='text-secondary' data-toggle='tooltip' data-placement='top' title='" + sourceClassNameFull + "'>[" + sourceClassNameFullShort + "]</span>" + tab;
+        if (isClickableClassName(sourceClassNameFull)) {
+            return makeClickableClassNameLink(sourceClassNameFull, lineNumber, sourceClassNameFullShort);
+        }
+        return "<span class='text-secondary'>[" + sourceClassNameFullShort + "]</span>" + tab;
     }
     return "";
 }
 
-function getFullClassName(sourceClassNameFull) {
+function getFullClassName(sourceClassNameFull, lineNumber) {
     if($('#logstreamColumnsModalSourceClassFullSwitch').is(":checked")){
+        if (isClickableClassName(sourceClassNameFull)) {
+            return makeClickableClassNameLink(sourceClassNameFull, lineNumber, sourceClassNameFull);
+        }
         return "<span class='text-secondary'>[" + sourceClassNameFull + "]</span>" + tab;
     }
     return "";
 }
 
-function getClassName(className) {
+function getClassName(sourceClassNameFull, lineNumber, className) {
     if($('#logstreamColumnsModalSourceClassSwitch').is(":checked")){
+        if (isClickableClassName(sourceClassNameFull)) {
+            return makeClickableClassNameLink(sourceClassNameFull, lineNumber, className);
+        }
         return "<span class='text-secondary'>[" + className + "]</span>" + tab;
     }
     return "";
+}
+
+function isClickableClassName(className){
+    if (className !== undefined && appClassLang(className) && ideKnown()) {
+        return true;
+    }
+    return false;
+}
+
+function makeClickableClassNameLink(className, lineNumber, display){
+    return "<a class='text-secondary clickable-app-class' onclick='openInIDE(\"" + className + "\",\"" + lineNumber + "\");'>[" + display + "]</a>" + tab;
 }
 
 function getMethodName(methodName) {
@@ -575,7 +616,7 @@ function makeLink(message, protocol){
     return message.replace(url, link);    
 }
 
-function enhanceStacktrace(loggerName, stacktrace) {
+function enhanceStacktrace(stacktrace) {
     var enhanceStacktrace = [];
     var lines = stacktrace.split('\n');
     for (var i = 0; i < lines.length; i++) {
@@ -586,9 +627,18 @@ function enhanceStacktrace(loggerName, stacktrace) {
                 var parts = line.split(":");
                 line = "<b>" + parts[0] + ":</b>" + parts[1];
             } else {
-                var isMyClass = line.includes(loggerName);
-                if (isMyClass && loggerName) {
-                    line = '<b>' + line + '</b>';
+                if(!line.includes(".zig")){
+                    var parts = line.split(" ");
+                    // Make it clickable
+                    var classMethodFileNumber = parts[1];
+                    var classMethodFileNumberSplit = classMethodFileNumber.split("(");
+                    var classMethod = classMethodFileNumberSplit[0];
+                    var fileNumber = classMethodFileNumberSplit[1];
+                    givenClassName = classMethod.substring(0, classMethod.lastIndexOf('.'));
+                    if(isClickableClassName(givenClassName)){
+                        lineNumber = fileNumber.substring(fileNumber.lastIndexOf(':') + 1, fileNumber.lastIndexOf(')'));
+                        line = "<a class='text-wrap text-danger clickable-app-class' onclick='openInIDE(\"" + givenClassName + "\",\"" + lineNumber + "\");'><b>" + line + "</b></a>";
+                    }
                 }
                 line = space + space + space + space + space + space + line;
             }
@@ -616,15 +666,14 @@ function openSocket() {
         return;
     }
     // Create a new instance of the websocket
-    var loc = window.location, new_uri;
-    if (loc.protocol === "https:") {
+    var new_uri;
+    if (window.location.protocol === "https:") {
         new_uri = "wss:";
     } else {
         new_uri = "ws:";
     }
-    var pathname = loc.pathname;
-    var devpath = pathname.substr(0, pathname.indexOf('/dev/'));
-    new_uri += "//" + loc.host + devpath + "/dev/logstream";
+    
+    new_uri += "//" + window.location.host + frameworkRootPath + streamingPath;
     webSocket = new WebSocket(new_uri);
 
     webSocket.onmessage = function (event) {
@@ -661,9 +710,9 @@ function openSocket() {
                 + getLoggerNameAbbreviated(json.loggerNameShort)
                 + getLoggerName(json.loggerName)
                 + getLoggerClassName(json.loggerClassName)        
-                + getClassFullAbbreviatedName(json.sourceClassNameFull, json.sourceClassNameFullShort)
-                + getFullClassName(json.sourceClassNameFull)
-                + getClassName(json.sourceClassName)
+                + getClassFullAbbreviatedName(json.sourceClassNameFull, json.sourceLineNumber,json.sourceClassNameFullShort)
+                + getFullClassName(json.sourceClassNameFull,json.sourceLineNumber)
+                + getClassName(json.sourceClassNameFull,json.sourceLineNumber,json.sourceClassName)
                 + getMethodName(json.sourceMethodName)
                 + getFileName(json.sourceFileName)
                 + getLineNumber(json.sourceLineNumber)
@@ -675,7 +724,7 @@ function openSocket() {
                 
         if (json.stacktrace) {
             for (var i in json.stacktrace) {
-                var stacktrace = enhanceStacktrace(json.loggerName, json.stacktrace[i]);
+                var stacktrace = enhanceStacktrace(json.stacktrace[i]);
                 htmlLine = htmlLine + stacktrace;
             }
         }

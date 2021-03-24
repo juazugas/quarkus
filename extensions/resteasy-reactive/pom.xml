@@ -21,6 +21,7 @@
         <module>quarkus-resteasy-reactive-jsonb</module>
         <module>quarkus-resteasy-reactive-qute</module>
         <module>quarkus-resteasy-reactive-servlet</module>
+        <module>rest-client-reactive</module>
     </modules>
 
 </project>

@@ -39,7 +39,7 @@ class QuarkusCodestartCatalogTest extends PlatformAwareTestBase {
                 .hasSize(1)
                 .allSatisfy(s -> assertThat(s).containsExactlyInAnyOrder("java", "kotlin"));
 
-        assertThat(catalog.getCodestarts()).filteredOn("ref", "qute")
+        assertThat(catalog.getCodestarts()).filteredOn("ref", "resteasy-qute")
                 .extracting(Codestart::getImplementedLanguages)
                 .hasSize(1)
                 .allSatisfy(s -> assertThat(s).containsExactlyInAnyOrder("java", "kotlin"));
@@ -162,7 +162,7 @@ class QuarkusCodestartCatalogTest extends PlatformAwareTestBase {
     }
 
     private QuarkusCodestartCatalog getCatalog() throws IOException {
-        return QuarkusCodestartCatalog.fromQuarkusPlatformDescriptor(getPlatformDescriptor());
+        return QuarkusCodestartCatalog.fromExtensionsCatalog(getExtensionsCatalog(), getCodestartsResourceLoader());
     }
 
 }

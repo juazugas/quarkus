@@ -13,10 +13,6 @@
     <name>Quarkus - Integration Tests - Kafka Streams</name>
     <description>The Kafka Streams integration tests module</description>
 
-    <properties>
-        <maven.compiler.parameters>true</maven.compiler.parameters>
-    </properties>
-
     <dependencies>
         <dependency>
             <groupId>io.quarkus</groupId>
@@ -191,6 +187,19 @@
             <!-- add some custom config, the rest comes from parent -->
             <properties>
                 <quarkus.native.enable-all-security-services>true</quarkus.native.enable-all-security-services>
+            </properties>
+        </profile>
+        <!-- Skip the tests on Windows due to https://issues.apache.org/jira/browse/KAFKA-12190 -->
+        <profile>
+            <id>skip-tests-windows</id>
+            <activation>
+                <os>
+                    <family>windows</family>
+                </os>
+            </activation>
+            <properties>
+                <skipTests>true</skipTests>
+                <skipITs>true</skipITs>
             </properties>
         </profile>
     </profiles>

@@ -6,6 +6,7 @@ import static io.quarkus.test.common.PathTestHelper.getTestClassesLocation;
 import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
+import java.lang.annotation.Annotation;
 import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadInfo;
 import java.lang.reflect.Constructor;
@@ -88,6 +89,7 @@ import io.quarkus.runtime.configuration.ProfileManager;
 import io.quarkus.runtime.test.TestHttpEndpointProvider;
 import io.quarkus.test.common.PathTestHelper;
 import io.quarkus.test.common.PropertyTestUtil;
+import io.quarkus.test.common.QuarkusTestResource;
 import io.quarkus.test.common.RestAssuredURLManager;
 import io.quarkus.test.common.TestClassIndexer;
 import io.quarkus.test.common.TestResourceManager;
@@ -129,6 +131,8 @@ public class QuarkusTestExtension
     private static List<Object> afterEachCallbacks;
     private static Class<?> quarkusTestMethodContextClass;
     private static Class<? extends QuarkusTestProfile> quarkusTestProfile;
+    private static boolean hasPerTestResources;
+    private static Class<?> currentJUnitTestClass;
     private static List<Function<Class<?>, String>> testHttpEndpointProviders;
 
     private static DeepClone deepClone;
@@ -187,6 +191,7 @@ public class QuarkusTestExtension
         hangTaskKey = hangDetectionExecutor.schedule(hangDetectionTask, hangTimeout.toMillis(), TimeUnit.MILLISECONDS);
 
         quarkusTestProfile = profile;
+        currentJUnitTestClass = context.getRequiredTestClass();
         Closeable testResourceManager = null;
         try {
             final LinkedBlockingDeque<Runnable> shutdownTasks = new LinkedBlockingDeque<>();
@@ -231,6 +236,9 @@ public class QuarkusTestExtension
                                 }
                             })
                             .map(Class::getName).collect(Collectors.joining(",")));
+                }
+                if (profileInstance.disableApplicationLifecycleObservers()) {
+                    additional.put("quarkus.arc.test.disable-application-lifecycle-observers", "true");
                 }
                 if (profileInstance.getConfigProfile() != null) {
                     System.setProperty(ProfileManager.QUARKUS_TEST_PROFILE_PROP, profileInstance.getConfigProfile());
@@ -308,12 +316,15 @@ public class QuarkusTestExtension
 
             //must be done after the TCCL has been set
             testResourceManager = (Closeable) startupAction.getClassLoader().loadClass(TestResourceManager.class.getName())
-                    .getConstructor(Class.class, List.class, boolean.class)
+                    .getConstructor(Class.class, Class.class, List.class, boolean.class)
                     .newInstance(requiredTestClass,
+                            profile != null ? profile : null,
                             getAdditionalTestResources(profileInstance, startupAction.getClassLoader()),
                             profileInstance != null && profileInstance.disableGlobalTestResources());
             testResourceManager.getClass().getMethod("init").invoke(testResourceManager);
             testResourceManager.getClass().getMethod("start").invoke(testResourceManager);
+            hasPerTestResources = (boolean) testResourceManager.getClass().getMethod("hasPerTestResources")
+                    .invoke(testResourceManager);
 
             populateCallbacks(startupAction.getClassLoader());
 
@@ -400,14 +411,14 @@ public class QuarkusTestExtension
         try {
             Constructor<?> testResourceClassEntryConstructor = Class
                     .forName(TestResourceManager.TestResourceClassEntry.class.getName(), true, classLoader)
-                    .getConstructor(Class.class, Map.class, boolean.class);
+                    .getConstructor(Class.class, Map.class, Annotation.class, boolean.class);
 
             List<QuarkusTestProfile.TestResourceEntry> testResources = profileInstance.testResources();
             List<Object> result = new ArrayList<>(testResources.size());
             for (QuarkusTestProfile.TestResourceEntry testResource : testResources) {
                 Object instance = testResourceClassEntryConstructor.newInstance(
                         Class.forName(testResource.getClazz().getName(), true, classLoader), testResource.getArgs(),
-                        testResource.isParallel());
+                        null, testResource.isParallel());
                 result.add(instance);
             }
 
@@ -461,7 +472,7 @@ public class QuarkusTestExtension
 
     @Override
     public void beforeEach(ExtensionContext context) throws Exception {
-        if (isNativeTest()) {
+        if (isNativeOrIntegrationTest()) {
             return;
         }
         resetHangTimeout();
@@ -530,7 +541,7 @@ public class QuarkusTestExtension
 
     @Override
     public void afterEach(ExtensionContext context) throws Exception {
-        if (isNativeTest()) {
+        if (isNativeOrIntegrationTest()) {
             return;
         }
         resetHangTimeout();
@@ -594,9 +605,9 @@ public class QuarkusTestExtension
                 constructor.newInstance(actualTestInstance, actualTestMethod));
     }
 
-    private boolean isNativeTest() {
+    private boolean isNativeOrIntegrationTest() {
         for (Class<?> i : currentTestClassStack) {
-            if (i.isAnnotationPresent(NativeImageTest.class)) {
+            if (i.isAnnotationPresent(NativeImageTest.class) || i.isAnnotationPresent(QuarkusIntegrationTest.class)) {
                 return true;
             }
         }
@@ -609,8 +620,11 @@ public class QuarkusTestExtension
         ExtensionState state = store.get(ExtensionState.class.getName(), ExtensionState.class);
         Class<? extends QuarkusTestProfile> selectedProfile = getQuarkusTestProfile(extensionContext);
         boolean wrongProfile = !Objects.equals(selectedProfile, quarkusTestProfile);
-        if ((state == null && !failedBoot) || wrongProfile) {
-            if (wrongProfile) {
+        // we reload the test resources if we changed test class and if we had or will have per-test test resources
+        boolean reloadTestResources = !Objects.equals(extensionContext.getRequiredTestClass(), currentJUnitTestClass)
+                && (hasPerTestResources || hasPerTestResources(extensionContext));
+        if ((state == null && !failedBoot) || wrongProfile || reloadTestResources) {
+            if (wrongProfile || reloadTestResources) {
                 if (state != null) {
                     try {
                         state.close();
@@ -663,7 +677,7 @@ public class QuarkusTestExtension
         currentTestClassStack.push(context.getRequiredTestClass());
         //set the right launch mode in the outer CL, used by the HTTP host config source
         ProfileManager.setLaunchMode(LaunchMode.TEST);
-        if (isNativeTest()) {
+        if (isNativeOrIntegrationTest()) {
             return;
         }
         resetHangTimeout();
@@ -702,7 +716,7 @@ public class QuarkusTestExtension
     @Override
     public void interceptBeforeAllMethod(Invocation<Void> invocation, ReflectiveInvocationContext<Method> invocationContext,
             ExtensionContext extensionContext) throws Throwable {
-        if (isNativeTest()) {
+        if (isNativeOrIntegrationTest()) {
             invocation.proceed();
             return;
         }
@@ -719,7 +733,7 @@ public class QuarkusTestExtension
     @Override
     public <T> T interceptTestClassConstructor(Invocation<T> invocation,
             ReflectiveInvocationContext<Constructor<T>> invocationContext, ExtensionContext extensionContext) throws Throwable {
-        if (isNativeTest()) {
+        if (isNativeOrIntegrationTest()) {
             return invocation.proceed();
         }
         resetHangTimeout();
@@ -813,7 +827,7 @@ public class QuarkusTestExtension
     @Override
     public void interceptBeforeEachMethod(Invocation<Void> invocation, ReflectiveInvocationContext<Method> invocationContext,
             ExtensionContext extensionContext) throws Throwable {
-        if (isNativeTest()) {
+        if (isNativeOrIntegrationTest()) {
             invocation.proceed();
             return;
         }
@@ -824,7 +838,7 @@ public class QuarkusTestExtension
     @Override
     public void interceptTestMethod(Invocation<Void> invocation, ReflectiveInvocationContext<Method> invocationContext,
             ExtensionContext extensionContext) throws Throwable {
-        if (isNativeTest()) {
+        if (isNativeOrIntegrationTest()) {
             invocation.proceed();
             return;
         }
@@ -835,7 +849,7 @@ public class QuarkusTestExtension
     @Override
     public void interceptTestTemplateMethod(Invocation<Void> invocation, ReflectiveInvocationContext<Method> invocationContext,
             ExtensionContext extensionContext) throws Throwable {
-        if (isNativeTest()) {
+        if (isNativeOrIntegrationTest()) {
             invocation.proceed();
             return;
         }
@@ -847,7 +861,7 @@ public class QuarkusTestExtension
     @Override
     public <T> T interceptTestFactoryMethod(Invocation<T> invocation,
             ReflectiveInvocationContext<Method> invocationContext, ExtensionContext extensionContext) throws Throwable {
-        if (isNativeTest()) {
+        if (isNativeOrIntegrationTest()) {
             return invocation.proceed();
         }
         T result = (T) runExtensionMethod(invocationContext, extensionContext);
@@ -858,7 +872,7 @@ public class QuarkusTestExtension
     @Override
     public void interceptAfterEachMethod(Invocation<Void> invocation, ReflectiveInvocationContext<Method> invocationContext,
             ExtensionContext extensionContext) throws Throwable {
-        if (isNativeTest()) {
+        if (isNativeOrIntegrationTest()) {
             invocation.proceed();
             return;
         }
@@ -869,7 +883,7 @@ public class QuarkusTestExtension
     @Override
     public void interceptAfterAllMethod(Invocation<Void> invocation, ReflectiveInvocationContext<Method> invocationContext,
             ExtensionContext extensionContext) throws Throwable {
-        if (isNativeTest()) {
+        if (isNativeOrIntegrationTest()) {
             invocation.proceed();
             return;
         }
@@ -936,7 +950,7 @@ public class QuarkusTestExtension
     public void afterAll(ExtensionContext context) throws Exception {
         resetHangTimeout();
         try {
-            if (!isNativeTest() && (runningQuarkusApplication != null)) {
+            if (!isNativeOrIntegrationTest() && (runningQuarkusApplication != null)) {
                 popMockContext();
             }
             if (originalCl != null) {
@@ -1173,5 +1187,33 @@ public class QuarkusTestExtension
             hangTaskKey.cancel(false);
             hangTaskKey = hangDetectionExecutor.schedule(hangDetectionTask, hangTimeout.toMillis(), TimeUnit.MILLISECONDS);
         }
+    }
+
+    static boolean hasPerTestResources(ExtensionContext extensionContext) {
+        return hasPerTestResources(extensionContext.getRequiredTestClass());
+    }
+
+    public static boolean hasPerTestResources(Class<?> requiredTestClass) {
+        while (requiredTestClass != Object.class) {
+            for (QuarkusTestResource testResource : requiredTestClass.getAnnotationsByType(QuarkusTestResource.class)) {
+                if (testResource.restrictToAnnotatedClass()) {
+                    return true;
+                }
+            }
+            // scan for meta-annotations
+            for (Annotation annotation : requiredTestClass.getAnnotations()) {
+                // skip TestResource annotations
+                if (annotation.annotationType() != QuarkusTestResource.class) {
+                    // look for a TestResource on the annotation itself
+                    if (annotation.annotationType().getAnnotationsByType(QuarkusTestResource.class).length > 0) {
+                        // meta-annotations are per-test scoped for now
+                        return true;
+                    }
+                }
+            }
+            // look up
+            requiredTestClass = requiredTestClass.getSuperclass();
+        }
+        return false;
     }
 }

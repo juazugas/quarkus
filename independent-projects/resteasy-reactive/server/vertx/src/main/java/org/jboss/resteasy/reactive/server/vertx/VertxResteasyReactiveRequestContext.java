@@ -217,6 +217,7 @@ public class VertxResteasyReactiveRequestContext extends ResteasyReactiveRequest
 
     @Override
     public ServerHttpResponse setReadListener(ReadCallback callback) {
+        request.pause();
         if (continueState == ContinueState.REQUIRED) {
             continueState = ContinueState.SENT;
             response.writeContinue();
@@ -233,9 +234,11 @@ public class VertxResteasyReactiveRequestContext extends ResteasyReactiveRequest
                 callback.done();
             }
         });
+        request.resume();
         return this;
     }
 
+    @SuppressWarnings("unchecked")
     @Override
     public <T> T unwrap(Class<T> theType) {
         if (theType == RoutingContext.class) {
@@ -244,6 +247,8 @@ public class VertxResteasyReactiveRequestContext extends ResteasyReactiveRequest
             return (T) request;
         } else if (theType == HttpServerResponse.class) {
             return (T) response;
+        } else if (theType == ResteasyReactiveRequestContext.class) {
+            return (T) this;
         }
         return null;
     }

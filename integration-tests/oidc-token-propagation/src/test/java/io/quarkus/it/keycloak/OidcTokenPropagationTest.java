@@ -13,11 +13,28 @@ import io.restassured.RestAssured;
 public class OidcTokenPropagationTest {
 
     @Test
-    public void testGetUserNameOidcClient() {
+    public void testGetUserNameWithJwtTokenPropagation() {
         RestAssured.given().auth().oauth2(KeycloakRealmResourceManager.getAccessToken("alice"))
-                .when().get("/frontend/user")
+                .when().get("/frontend/jwt-token-propagation")
                 .then()
                 .statusCode(200)
                 .body(equalTo("alice"));
+    }
+
+    @Test
+    public void testGetUserNameWithAccessTokenPropagation() {
+        RestAssured.given().auth().oauth2(KeycloakRealmResourceManager.getAccessToken("alice"))
+                .when().get("/frontend/access-token-propagation")
+                .then()
+                .statusCode(200)
+                .body(equalTo("alice"));
+    }
+
+    @Test
+    public void testGetUserNameFromServiceAccount() {
+        RestAssured.when().get("/frontend/service-account")
+                .then()
+                .statusCode(200)
+                .body(equalTo("bob"));
     }
 }

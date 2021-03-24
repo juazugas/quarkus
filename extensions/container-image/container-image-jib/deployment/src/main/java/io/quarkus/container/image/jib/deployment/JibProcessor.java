@@ -133,6 +133,7 @@ public class JibProcessor {
                     "Package type '" + packageType + "' is not supported by the container-image-jib extension");
         }
         setUser(jibConfig, jibContainerBuilder);
+        setPlatforms(jibConfig, jibContainerBuilder);
         handleExtraFiles(outputTarget, jibContainerBuilder);
         JibContainer container = containerize(containerImageConfig, jibConfig, containerImage, jibContainerBuilder,
                 pushRequest.isPresent());
@@ -164,6 +165,7 @@ public class JibProcessor {
         JibContainerBuilder jibContainerBuilder = createContainerBuilderFromNative(containerImageConfig, jibConfig,
                 nativeImage, containerImageLabels);
         setUser(jibConfig, jibContainerBuilder);
+        setPlatforms(jibConfig, jibContainerBuilder);
         handleExtraFiles(outputTarget, jibContainerBuilder);
         JibContainer container = containerize(containerImageConfig, jibConfig, containerImage, jibContainerBuilder,
                 pushRequest.isPresent());
@@ -368,6 +370,18 @@ public class JibProcessor {
                 });
                 jibContainerBuilder.addFileEntriesLayer(bootLibsLayerBuilder.build());
 
+                Path deploymentPath = componentsPath.resolve(JarResultBuildStep.LIB).resolve(JarResultBuildStep.DEPLOYMENT_LIB);
+                if (Files.exists(deploymentPath)) { // this is the case of mutable-jar
+                    FileEntriesLayer.Builder deploymentLayerBuilder = FileEntriesLayer.builder();
+                    Files.list(deploymentPath).forEach(lib -> {
+                        AbsoluteUnixPath libPathInContainer = workDirInContainer.resolve(JarResultBuildStep.LIB)
+                                .resolve(JarResultBuildStep.DEPLOYMENT_LIB)
+                                .resolve(lib.getFileName());
+                        deploymentLayerBuilder.addEntry(lib, libPathInContainer);
+                    });
+                    jibContainerBuilder.addFileEntriesLayer(deploymentLayerBuilder.build());
+                }
+
                 jibContainerBuilder.addLayer(nonFastChangingLibPaths,
                         workDirInContainer.resolve(JarResultBuildStep.LIB).resolve(JarResultBuildStep.MAIN));
                 jibContainerBuilder.addLayer(new ArrayList<>(fastChangingLibPaths),
@@ -399,6 +413,7 @@ public class JibProcessor {
             for (int port : jibConfig.ports) {
                 jibContainerBuilder.addExposedPort(Port.tcp(port));
             }
+
             return jibContainerBuilder;
 
         } catch (IOException e) {
@@ -427,6 +442,10 @@ public class JibProcessor {
 
     private void setUser(JibConfig jibConfig, JibContainerBuilder jibContainerBuilder) {
         jibConfig.user.ifPresent(jibContainerBuilder::setUser);
+    }
+
+    private void setPlatforms(JibConfig jibConfig, JibContainerBuilder jibContainerBuilder) {
+        jibConfig.platforms.map(PlatformHelper::parse).ifPresent(jibContainerBuilder::setPlatforms);
     }
 
     private JibContainerBuilder createContainerBuilderFromLegacyJar(JibConfig jibConfig,

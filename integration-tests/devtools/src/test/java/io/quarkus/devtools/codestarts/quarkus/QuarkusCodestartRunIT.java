@@ -48,12 +48,8 @@ class QuarkusCodestartRunIT extends PlatformAwareTestBase {
         SnapshotTesting.deleteTestDirectory(testDirPath.toFile());
     }
 
-    private Map<String, Object> getTestInputData() {
-        return getTestInputData(null);
-    }
-
     private Map<String, Object> getTestInputData(final Map<String, Object> override) {
-        return QuarkusCodestartGenerationTest.getTestInputData(getPlatformDescriptor(), override);
+        return getTestInputData(getExtensionsCatalog(), override);
     }
 
     @Test
@@ -164,7 +160,6 @@ class QuarkusCodestartRunIT extends PlatformAwareTestBase {
                 .addCodestarts(codestarts)
                 .addCodestart(language)
                 .addData(data)
-                .putData(QuarkusDataKey.JAVA_VERSION.key(), System.getProperty("java.specification.version"))
                 .build();
         final CodestartProjectDefinition projectDefinition = getCatalog().createProject(input);
         Path projectDir = testDirPath.resolve(name);
@@ -188,7 +183,7 @@ class QuarkusCodestartRunIT extends PlatformAwareTestBase {
     }
 
     private QuarkusCodestartCatalog getCatalog() throws IOException {
-        return QuarkusCodestartCatalog.fromQuarkusPlatformDescriptor(getPlatformDescriptor());
+        return QuarkusCodestartCatalog.fromExtensionsCatalog(getExtensionsCatalog(), getCodestartsResourceLoader());
     }
 
     private List<String> getRunTogetherExamples() throws IOException {

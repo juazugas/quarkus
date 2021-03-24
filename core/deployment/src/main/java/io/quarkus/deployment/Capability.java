@@ -30,6 +30,8 @@ public enum Capability {
     RESTEASY_JSON,
     RESTEASY_MUTINY,
     RESTEASY_REACTIVE,
+    RESTEASY_JACKSON,
+    RESTEASY_JSONB,
     JWT,
     TIKA,
     MONGODB_PANACHE,
@@ -65,7 +67,8 @@ public enum Capability {
      */
     SMALLRYE_OPENTRACING,
     SPRING_WEB,
-    SMALLRYE_OPENAPI;
+    SMALLRYE_OPENAPI,
+    OPENSHIFT_CLIENT;
 
     /**
      *

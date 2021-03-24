@@ -15,7 +15,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import javax.enterprise.context.Dependent;
+import javax.enterprise.context.ApplicationScoped;
 import javax.enterprise.inject.Default;
 
 import org.jboss.logging.Logger;
@@ -37,12 +37,13 @@ import io.quarkus.deployment.annotations.Record;
 import io.quarkus.deployment.builditem.CapabilityBuildItem;
 import io.quarkus.deployment.builditem.FeatureBuildItem;
 import io.quarkus.deployment.builditem.ServiceStartBuildItem;
+import io.quarkus.deployment.builditem.SystemPropertyBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.NativeImageResourceBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.NativeImageResourceBundleBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.RuntimeInitializedClassBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ServiceProviderBuildItem;
-import io.quarkus.deployment.pkg.steps.NativeBuild;
+import io.quarkus.deployment.pkg.steps.NativeOrNativeSourcesBuild;
 import io.quarkus.deployment.util.ServiceUtil;
 import io.quarkus.liquibase.LiquibaseDataSource;
 import io.quarkus.liquibase.LiquibaseFactory;
@@ -73,7 +74,15 @@ class LiquibaseProcessor {
         return new CapabilityBuildItem(Capability.LIQUIBASE);
     }
 
-    @BuildStep(onlyIf = NativeBuild.class)
+    @BuildStep
+    public SystemPropertyBuildItem disableHub() {
+        // Don't block app startup with prompt:
+        // Do you want to see this operation's report in Liquibase Hub, which improves team collaboration?
+        // If so, enter your email. If not, enter [N] to no longer be prompted, or [S] to skip for now, but ask again next time (default "S"):
+        return new SystemPropertyBuildItem("liquibase.hub.mode", "off");
+    }
+
+    @BuildStep(onlyIf = NativeOrNativeSourcesBuild.class)
     @Record(STATIC_INIT)
     void nativeImageConfiguration(
             LiquibaseRecorder recorder,
@@ -211,7 +220,7 @@ class LiquibaseProcessor {
         for (String dataSourceName : dataSourceNames) {
             SyntheticBeanBuildItem.ExtendedBeanConfigurator configurator = SyntheticBeanBuildItem
                     .configure(LiquibaseFactory.class)
-                    .scope(Dependent.class) // this is what the existing code does, but it doesn't seem reasonable
+                    .scope(ApplicationScoped.class) // this is what the existing code does, but it doesn't seem reasonable
                     .setRuntimeInit()
                     .unremovable()
                     .supplier(recorder.liquibaseSupplier(dataSourceName));

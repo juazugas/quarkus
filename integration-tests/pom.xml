@@ -38,6 +38,7 @@
         <module>gradle</module>
         <module>main</module>
         <module>kafka</module>
+        <module>kafka-snappy</module>
         <module>kafka-avro</module>
         <module>kafka-streams</module>
         <module>jpa</module>
@@ -61,6 +62,7 @@
         <module>hibernate-search-orm-elasticsearch</module>
         <module>hibernate-tenancy</module>
         <module>hibernate-orm-envers</module>
+        <module>legacy-redirect</module>
         <module>vertx-http</module>
         <module>vertx-web</module>
         <module>vertx</module>
@@ -81,6 +83,7 @@
         <module>oidc-client</module>
         <module>oidc-client-wiremock</module>
         <module>oidc-token-propagation</module>
+        <module>smallrye-jwt-token-propagation</module>
         <module>oidc-code-flow</module>
         <module>oidc-tenancy</module>
         <module>oidc-wiremock</module>
@@ -94,7 +97,7 @@
         <module>amazon-lambda-s3event</module>
         <module>amazon-lambda-stream-handler</module>
         <module>amazon-lambda-http</module>
-        <module>amazon-lambda-http-v1</module>
+        <module>amazon-lambda-rest</module>
         <module>amazon-lambda-http-resteasy</module>
         <module>container-image</module>
         <module>kubernetes</module>
@@ -141,6 +144,8 @@
         <module>reactive-messaging-kafka</module>
         <module>reactive-messaging-http</module>
         <module>rest-client</module>
+        <module>resteasy-reactive-rest-client</module>
+        <module>resteasy-reactive-rest-client-standalone</module>
         <module>packaging</module>
         <module>simple with space</module>
         <module>consul-config</module>
@@ -162,7 +167,7 @@
 
         <!-- gRPC tests -->
         <module>grpc-tls</module>
-        <module>grpc-plain-text</module>
+        <module>grpc-plain-text-gzip</module>
         <module>grpc-plain-text-mutiny</module>
         <module>grpc-mutual-auth</module>
         <module>grpc-streaming</module>

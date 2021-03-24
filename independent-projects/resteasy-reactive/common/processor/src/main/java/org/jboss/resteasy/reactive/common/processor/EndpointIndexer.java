@@ -17,9 +17,11 @@ import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNa
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.HEADER_PARAM;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.INTEGER;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.LIST;
+import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.LOCAL_DATE;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.LONG;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.MATRIX_PARAM;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.MULTI;
+import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.MULTI_PART_FORM_PARAM;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.NON_BLOCKING;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.OPTIONAL;
 import static org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames.PATH;
@@ -114,6 +116,7 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
     protected static final String[] EMPTY_STRING_ARRAY = new String[] {};
     private static final String[] PRODUCES_PLAIN_TEXT_NEGOTIATED = new String[] { MediaType.TEXT_PLAIN, MediaType.WILDCARD };
     private static final String[] PRODUCES_PLAIN_TEXT = new String[] { MediaType.TEXT_PLAIN };
+    public static final String CDI_WRAPPER_SUFFIX = "$$CDIWrapper";
 
     static {
         Map<String, String> prims = new HashMap<>();
@@ -154,14 +157,15 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
     }
 
     protected final IndexView index;
-    private final Map<String, String> existingConverters;
+    protected final Map<String, String> existingConverters;
+    protected final Map<String, InjectableBean> injectableBeans;
+    protected final boolean hasRuntimeConverters;
+
     private final Map<DotName, String> scannedResourcePaths;
     protected final ResteasyReactiveConfig config;
-    private final AdditionalReaders additionalReaders;
+    protected final AdditionalReaders additionalReaders;
     private final Map<DotName, String> httpAnnotationToMethod;
-    private final Map<String, InjectableBean> injectableBeans;
     private final AdditionalWriters additionalWriters;
-    private final boolean hasRuntimeConverters;
     private final boolean defaultBlocking;
     private final Map<DotName, Map<String, String>> classLevelExceptionMappers;
     private final Function<String, BeanFactory<Object>> factoryCreator;
@@ -240,6 +244,12 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
     protected List<ResourceMethod> createEndpoints(ClassInfo currentClassInfo,
             ClassInfo actualEndpointInfo, Set<String> seenMethods,
             Set<String> pathParameters) {
+
+        // $$CDIWrapper suffix is used to generate CDI beans from interfaces, we don't want to create endpoints for them:
+        if (currentClassInfo.name().toString().endsWith(CDI_WRAPPER_SUFFIX)) {
+            return Collections.emptyList();
+        }
+
         List<ResourceMethod> ret = new ArrayList<>();
         String[] classProduces = extractProducesConsumesValues(currentClassInfo.classAnnotation(PRODUCES));
         String[] classConsumes = extractProducesConsumesValues(currentClassInfo.classAnnotation(CONSUMES));
@@ -270,7 +280,7 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
                             methodPath = "/" + methodPath;
                         }
                     } else {
-                        methodPath = "/";
+                        methodPath = "";
                     }
                     ResourceMethod method = createResourceMethod(currentClassInfo, actualEndpointInfo,
                             classProduces, classConsumes, classNameBindings, httpMethod, info, methodPath, pathParameters,
@@ -298,6 +308,9 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
                     if (methodPath != null) {
                         if (!methodPath.startsWith("/")) {
                             methodPath = "/" + methodPath;
+                        }
+                        if (methodPath.endsWith("/")) {
+                            methodPath = methodPath.substring(0, methodPath.length() - 1);
                         }
                     }
                     ResourceMethod method = createResourceMethod(currentClassInfo, actualEndpointInfo,
@@ -382,6 +395,7 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
             boolean suspended = false;
             boolean sse = false;
             boolean formParamRequired = false;
+            boolean multipart = false;
             boolean hasBodyParam = false;
             TypeArgMapper typeArgMapper = new TypeArgMapper(info.declaringClass(), index);
             for (int i = 0; i < methodParameters.length; ++i) {
@@ -416,17 +430,39 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
 
                 if (type == ParameterType.BEAN) {
                     // transform the bean param
-                    ClassInfo beanParamClassInfo = index.getClassByName(paramType.name());
-                    InjectableBean injectableBean = scanInjectableBean(beanParamClassInfo,
-                            actualEndpointInfo,
-                            existingConverters, additionalReaders, injectableBeans, hasRuntimeConverters);
-                    if (injectableBean.isFormParamRequired()) {
-                        formParamRequired = true;
-                    }
+                    formParamRequired |= handleBeanParam(actualEndpointInfo, paramType, methodParameters, i);
                 } else if (type == ParameterType.FORM) {
                     formParamRequired = true;
+                } else if (type == ParameterType.MULTI_PART_FORM) {
+                    multipart = true;
+                    ClassInfo multipartClassInfo = index.getClassByName(paramType.name());
+                    handleMultipart(multipartClassInfo);
                 }
             }
+
+            if (multipart) {
+                if (hasBodyParam) {
+                    throw new RuntimeException(
+                            "'@MultipartForm' cannot be used in a resource method that contains a body parameter. Offending method is '"
+                                    + info.declaringClass().name() + "#" + info.toString() + "'");
+                }
+                boolean validConsumes = false;
+                if (consumes != null) {
+                    for (String c : consumes) {
+                        if (c.equals(MediaType.MULTIPART_FORM_DATA)) {
+                            validConsumes = true;
+                            break;
+                        }
+                    }
+                }
+                // TODO: does it make sense to default to MediaType.MULTIPART_FORM_DATA when no consumes is set?
+                if (!validConsumes) {
+                    throw new RuntimeException(
+                            "'@MultipartForm' can only be used on methods that annotated with '@Consumes(MediaType.MULTIPART_FORM_DATA)'. Offending method is '"
+                                    + info.declaringClass().name() + "#" + info.toString() + "'");
+                }
+            }
+
             Type nonAsyncReturnType = getNonAsyncReturnType(info.returnType());
             addWriterForType(additionalWriters, nonAsyncReturnType);
 
@@ -462,6 +498,7 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
                     .setSse(sse)
                     .setSseElementType(sseElementType)
                     .setFormParamRequired(formParamRequired)
+                    .setMultipart(multipart)
                     .setParameters(methodParameters)
                     .setSimpleReturnType(toClassName(info.returnType(), currentClassInfo, actualEndpointInfo, index))
                     // FIXME: resolved arguments ?
@@ -476,6 +513,10 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
         }
     }
 
+    protected void handleMultipart(ClassInfo multipartClassInfo) {
+
+    }
+
     private String determineReturnType(MethodInfo info, TypeArgMapper typeArgMapper, ClassInfo currentClassInfo,
             ClassInfo actualEndpointInfo, IndexView index) {
         Type type = info.returnType();
@@ -484,6 +525,9 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
         }
         return AsmUtil.getSignature(type, typeArgMapper);
     }
+
+    protected abstract boolean handleBeanParam(ClassInfo actualEndpointInfo, Type paramType, MethodParameter[] methodParameters,
+            int i);
 
     protected void handleAdditionalMethodProcessing(METHOD method, ClassInfo currentClassInfo, MethodInfo info) {
 
@@ -503,13 +547,13 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
     private String[] applyDefaultProduces(String[] produces, Type nonAsyncReturnType) {
         if (produces != null && produces.length != 0)
             return produces;
-        // FIXME: primitives
-        if (STRING.equals(nonAsyncReturnType.name()))
-            return config.isSingleDefaultProduces() ? PRODUCES_PLAIN_TEXT : PRODUCES_PLAIN_TEXT_NEGOTIATED;
         return applyAdditionalDefaults(nonAsyncReturnType);
     }
 
     protected String[] applyAdditionalDefaults(Type nonAsyncReturnType) {
+        // FIXME: primitives
+        if (STRING.equals(nonAsyncReturnType.name()))
+            return config.isSingleDefaultProduces() ? PRODUCES_PLAIN_TEXT : PRODUCES_PLAIN_TEXT_NEGOTIATED;
         return EMPTY_STRING_ARRAY;
     }
 
@@ -584,7 +628,15 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
         if (annotation == null) {
             return null;
         }
-        String[] originalStrings = annotation.value().asStringArray();
+
+        String[] originalStrings;
+        AnnotationValue value = annotation.value();
+        if (value == null) {
+            originalStrings = new String[] { MediaType.WILDCARD };
+        } else {
+            originalStrings = value.asStringArray();
+        }
+
         if (originalStrings.length > 0) {
             List<String> result = new ArrayList<>(originalStrings.length);
             for (String s : originalStrings) {
@@ -698,6 +750,7 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
                 .setSourceName(sourceName);
 
         AnnotationInstance beanParam = anns.get(BEAN_PARAM);
+        AnnotationInstance multiPartFormParam = anns.get(MULTI_PART_FORM_PARAM);
         AnnotationInstance pathParam = anns.get(PATH_PARAM);
         AnnotationInstance queryParam = anns.get(QUERY_PARAM);
         AnnotationInstance headerParam = anns.get(HEADER_PARAM);
@@ -782,6 +835,8 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
         } else if (beanParam != null) {
             // no name required
             builder.setType(ParameterType.BEAN);
+        } else if (multiPartFormParam != null) {
+            builder.setType(ParameterType.MULTI_PART_FORM);
         } else if (suspendedAnnotation != null) {
             // no name required
             builder.setType(ParameterType.ASYNC_RESPONSE);
@@ -847,6 +902,10 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
             elementType = paramType.name().toString();
             handlePathSegmentParam(builder);
             typeHandled = true;
+        } else if ((paramType.name().equals(LOCAL_DATE)) && (type == ParameterType.PATH || type == ParameterType.QUERY)) {
+            elementType = paramType.name().toString();
+            handleLocalDateParam(builder);
+            typeHandled = true;
         }
 
         if (!typeHandled) {
@@ -854,7 +913,7 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
             addReaderForType(additionalReaders, paramType);
 
             if (type != ParameterType.CONTEXT && type != ParameterType.BEAN && type != ParameterType.BODY
-                    && type != ParameterType.ASYNC_RESPONSE) {
+                    && type != ParameterType.ASYNC_RESPONSE && type != ParameterType.MULTI_PART_FORM) {
                 handleOtherParam(existingConverters, errorLocation, hasRuntimeConverters, builder, elementType);
             }
             if (type == ParameterType.CONTEXT && elementType.equals(SseEventSink.class.getName())) {
@@ -874,6 +933,9 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
     }
 
     protected void handlePathSegmentParam(PARAM builder) {
+    }
+
+    protected void handleLocalDateParam(PARAM builder) {
     }
 
     protected void handleOtherParam(Map<String, String> existingConverters, String errorLocation, boolean hasRuntimeConverters,
@@ -999,48 +1061,4 @@ public abstract class EndpointIndexer<T extends EndpointIndexer<T, PARAM, METHOD
         public abstract T build();
     }
 
-    private static class TypeArgMapper implements Function<String, String> {
-        private final ClassInfo declaringClass;
-        private final IndexView index;
-
-        public TypeArgMapper(ClassInfo declaringClass, IndexView index) {
-            this.declaringClass = declaringClass;
-            this.index = index;
-        }
-
-        @Override
-        public String apply(String v) {
-            //we attempt to resolve type variables
-            ClassInfo declarer = declaringClass;
-            int pos = -1;
-            for (;;) {
-                if (declarer == null) {
-                    return null;
-                }
-                List<TypeVariable> typeParameters = declarer.typeParameters();
-                for (int i = 0; i < typeParameters.size(); i++) {
-                    TypeVariable tv = typeParameters.get(i);
-                    if (tv.identifier().equals(v)) {
-                        pos = i;
-                    }
-                }
-                if (pos != -1) {
-                    break;
-                }
-                declarer = index.getClassByName(declarer.superName());
-            }
-            Type type = JandexUtil
-                    .resolveTypeParameters(declaringClass.name(), declarer.name(), index)
-                    .get(pos);
-            if (type.kind() == Type.Kind.TYPE_VARIABLE && type.asTypeVariable().identifier().equals(v)) {
-                List<Type> bounds = type.asTypeVariable().bounds();
-                if (bounds.isEmpty()) {
-                    return "Ljava/lang/Object;";
-                }
-                return AsmUtil.getSignature(bounds.get(0), this);
-            } else {
-                return AsmUtil.getSignature(type, this);
-            }
-        }
-    }
 }

@@ -1,7 +1,7 @@
 ////
 This guide is maintained in the main Quarkus repository
 and pull requests should be submitted there:
-https://github.com/quarkusio/quarkus/tree/master/docs/src/main/asciidoc
+https://github.com/quarkusio/quarkus/tree/main/docs/src/main/asciidoc
 ////
 = Quarkus - Using OpenAPI and Swagger UI
 
@@ -467,12 +467,13 @@ You can update the `/swagger-ui` sub path by setting the `quarkus.swagger-ui.pat
 
 [source, properties]
 ----
-quarkus.swagger-ui.path=/my-custom-path
+quarkus.swagger-ui.path=my-custom-path
 ----
 
 [WARNING]
 ====
 The value `/` is not allowed as it blocks the application from serving anything else.
+A value prefixed with '/' makes it absolute and not relative.
 ====
 
 Now, we are ready to run our application:

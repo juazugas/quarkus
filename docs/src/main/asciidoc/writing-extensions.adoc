@@ -1,7 +1,7 @@
 ////
 This guide is maintained in the main Quarkus repository
 and pull requests should be submitted there:
-https://github.com/quarkusio/quarkus/tree/master/docs/src/main/asciidoc
+https://github.com/quarkusio/quarkus/tree/main/docs/src/main/asciidoc
 ////
 = Quarkus - Writing Your Own Extension
 
@@ -898,18 +898,6 @@ ExecutorBuildItem createExecutor( // <2>
 <1> Note the `optional` attribute.
 <2> This example is using recorder proxies; see the section on <<bytecode-recording,bytecode recording>> for more information.
 
-==== Capabilities
-
-The `@BuildStep` annotation has a `providesCapabilities` property that can be used to provide capability information
-to other extensions about what is present in the current application. Capabilities are simply strings that are used to
-describe an extension. Capabilities should generally be named after an extensions root package, for example the transactions
-extension will provide `io.quarkus.transactions`.
-
-To check if a capability is present you can inject the `io.quarkus.deployment.Capabilities` object and call
-`isCapabilityPresent`.
-
-Capabilities should be used when checking for the presence of an extension rather than class path based checks.
-
 ==== Application Archives
 
 The `@BuildStep` annotation can also register marker files that determine which archives on the class path are considered
@@ -1354,6 +1342,9 @@ static class IsDevMode implements BooleanSupplier {
 }
 ----
 
+If you need to make your build step conditional on the presence or absence of another extension, you can
+use <<capabilities>> for that.
+
 [id='bytecode-recording']
 === Bytecode Recording
 
@@ -1434,7 +1425,7 @@ convenience to avoid the need to explicitly load classes in the recorders.
 ==== Printing step execution time
 
 At times, it can be useful to know how the exact time each startup task (which is the result of each bytecode recording) takes when the application is run.
-The simplest way to determine this information is to set the `quarkus.debug.print-startup-times` property to `true` when running the application.
+The simplest way to determine this information is to launch the Quarkus application with the `-Dquarkus.debug.print-startup-times=true` system property.
 The output will look something like:
 
 [source%nowrap]
@@ -1462,9 +1453,57 @@ As a CDI based runtime, Quarkus extensions often make CDI beans available as par
 However, Quarkus DI solution does not support CDI Portable Extensions.
 Instead, Quarkus extensions can make use of various link:cdi-reference[Build Time Extension Points].
 
-=== Quarkus DEV Console
+=== Quarkus DEV UI
 
-You can make your extension support the link:dev-console[Quarkus DEV Console] for a greater developer experience.
+You can make your extension support the link:dev-ui[Quarkus DEV UI] for a greater developer experience.
+
+=== Extension-defined endpoints
+
+Your extension can add additional, non-application endpoints to be served alongside endpoints
+for Health, Metrics, OpenAPI, Swagger UI, etc. 
+
+Use a `NonApplicationRootPathBuildItem` to define an endpoint:
+
+[source%nowrap,java]
+----
+@BuildStep
+RouteBuildItem myExtensionRoute(NonApplicationRootPathBuildItem nonApplicationRootPathBuildItem) {
+    return nonApplicationRootPathBuildItem.routeBuilder()
+                .route("custom-endpoint")
+                .handler(new MyCustomHandler())
+                .displayOnNotFoundPage()
+                .build();
+}
+----
+
+Note that the path above does not start with a '/', indicating it is a relative path. The above
+endpoint will be served relative to the configured non-application endpoint root. The non-application
+endpoint root is `/q` by default, which means the resulting endpoint will be found at `/q/custom-endpoint`. 
+
+Absolute paths are handled differently. If the above called `route("/custom-endpoint")`, the resulting 
+endpoint will be found at `/custom-endpoint`.
+
+If an extension needs nested non-application endpoints:
+
+[source%nowrap,java]
+----
+@BuildStep
+RouteBuildItem myNestedExtensionRoute(NonApplicationRootPathBuildItem nonApplicationRootPathBuildItem) {
+    return nonApplicationRootPathBuildItem.routeBuilder()
+                .nestedRoute("custom-endpoint", "deep")
+                .handler(new MyCustomHandler())
+                .displayOnNotFoundPage()
+                .build();
+}
+----
+
+Given a default non-application endpoint root of `/q`, this will create an endpoint at `/q/custom-endpoint/deep`.
+
+Absolute paths also have an impact on nested endpoints. If the above called `nestedRoute("custom-endpoint", "/deep")`, 
+the resulting endpoint will be found at `/deep`.
+
+Refer to the link:all-config#quarkus-vertx-http_quarkus.http.non-application-root-path[Quarkus Vertx HTTP configuration reference]
+for details on how the non-application root path is configured.
 
 === Extension Health Check
 
@@ -2028,7 +2067,7 @@ Indicates that all charsets should be enabled in native image.
 
 `io.quarkus.deployment.builditem.ExtensionSslNativeSupportBuildItem`::
 A convenient way to tell Quarkus that the extension requires SSL and it should be enabled during native image build.
-When using this feature, remember to add your extension to the list of extensions that offer SSL support automatically on the https://github.com/quarkusio/quarkus/blob/master/docs/src/main/asciidoc/native-and-ssl.adoc[native and ssl guide].
+When using this feature, remember to add your extension to the list of extensions that offer SSL support automatically on the https://github.com/quarkusio/quarkus/blob/main/docs/src/main/asciidoc/native-and-ssl.adoc[native and ssl guide].
 
 === IDE support tips
 
@@ -2043,11 +2082,18 @@ The only particular aspect of writing Quarkus extensions in Eclipse is that APT 
 
 === Troubleshooting / Debugging Tips
 
-==== Dump the Generated Classes to the File System
+// This id was previously used for the "Dump the Generated Classes to the File System" section
+[[dump-the-generated-classes-to-the-file-system]]
+==== Inspecting the Generated/Transformed Classes
 
-During the augmentation phase Quarkus extensions generate new and modify existing classes for various purposes. 
-Sometimes you need to inspect the generated bytecode to debug or understand an issue.
-There are three system properties that allow you to dump the classes to the filesystem:
+Quarkus generates a lot of classes during the build phase and in many cases also transforms existing classes.
+It is often extremely useful to see the generated bytecode and transformed classes during the development of an extension.
+
+If you set the `quarkus.package.fernflower.enabled` property to `true` then Quarkus will download and invoke the https://github.com/JetBrains/intellij-community/tree/master/plugins/java-decompiler/engine[Fernflower decompiler] and dump the result in the `decompiled` directory of the build tool output (`target/decompiled` for Maven for example).
+
+NOTE: This property only works during a normal production build (i.e. not for dev mode/tests) and when `fast-jar` packaging type is used (the default behavior).
+
+There are also three system properties that allow you to dump the generated/transformed classes to the filesystem and inspect them later, for example via a decompiler in your IDE.
 
 - `quarkus.debug.generated-classes-dir` - to dump the generated classes, such as bean metadata
 - `quarkus.debug.transformed-classes-dir` - to dump the transformed classes, e.g. Panache entities
@@ -2079,7 +2125,6 @@ The property is also honored when running tests:
 ----
 
 Analogously, you can use the `quarkus.debug.transformed-classes-dir` and `quarkus.debug.transformed-classes-dir` properties to dump the relevant output.
-
 
 ==== Multi-module Maven Projects and the Development Mode
 
@@ -2150,6 +2195,7 @@ cd rest-json
 A _capability_ represents a technical capability that can be queried by other extensions.
 An extension may provide multiple capabilities and multiple extensions can provide the same capability. 
 By default, capabilities are not displayed to users.
+Capabilities should be used when checking for the presence of an extension rather than class path based checks.
 
 Capabilities can be registered in a <<Build Step Processors>> method that produces a `CapabilityBuildItem`:
 

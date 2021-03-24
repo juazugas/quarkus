@@ -40,11 +40,24 @@ import org.jboss.logging.Logger;
  *
  * @author Martin Kouba
  */
-final class Types {
+public final class Types {
 
     static final Logger LOGGER = Logger.getLogger(Types.class);
 
     private static final Type OBJECT_TYPE = Type.create(DotNames.OBJECT, Kind.CLASS);
+
+    private static final Set<String> PRIMITIVE_CLASS_NAMES = new HashSet<>();
+
+    static {
+        PRIMITIVE_CLASS_NAMES.add("byte");
+        PRIMITIVE_CLASS_NAMES.add("char");
+        PRIMITIVE_CLASS_NAMES.add("double");
+        PRIMITIVE_CLASS_NAMES.add("float");
+        PRIMITIVE_CLASS_NAMES.add("int");
+        PRIMITIVE_CLASS_NAMES.add("long");
+        PRIMITIVE_CLASS_NAMES.add("short");
+        PRIMITIVE_CLASS_NAMES.add("boolean");
+    }
 
     // we ban these interfaces because they are new to Java 12 and are used by java.lang.String which
     // means that they cannot be included in bytecode if we want to have application built with Java 12+ but targeting Java 8 - 11
@@ -86,15 +99,7 @@ final class Types {
             // E.g. List<String> -> new ParameterizedTypeImpl(List.class, String.class)
             ParameterizedType parameterizedType = type.asParameterizedType();
 
-            List<Type> arguments = parameterizedType.arguments();
-            ResultHandle typeArgsHandle = creator.newArray(java.lang.reflect.Type.class, creator.load(arguments.size()));
-            for (int i = 0; i < arguments.size(); i++) {
-                creator.writeArrayValue(typeArgsHandle, i, getTypeHandle(creator, arguments.get(i), tccl));
-            }
-            return creator.newInstance(
-                    MethodDescriptor.ofConstructor(ParameterizedTypeImpl.class, java.lang.reflect.Type.class,
-                            java.lang.reflect.Type[].class),
-                    doLoadClass(creator, parameterizedType.name().toString(), tccl), typeArgsHandle);
+            return getParameterizedType(creator, tccl, parameterizedType);
 
         } else if (Kind.ARRAY.equals(type.kind())) {
             Type componentType = type.asArrayType().component();
@@ -141,6 +146,19 @@ final class Types {
         } else {
             throw new IllegalArgumentException("Unsupported bean type: " + type.kind() + ", " + type);
         }
+    }
+
+    public static ResultHandle getParameterizedType(BytecodeCreator creator, ResultHandle tccl,
+            ParameterizedType parameterizedType) {
+        List<Type> arguments = parameterizedType.arguments();
+        ResultHandle typeArgsHandle = creator.newArray(java.lang.reflect.Type.class, creator.load(arguments.size()));
+        for (int i = 0; i < arguments.size(); i++) {
+            creator.writeArrayValue(typeArgsHandle, i, getTypeHandle(creator, arguments.get(i), tccl));
+        }
+        return creator.newInstance(
+                MethodDescriptor.ofConstructor(ParameterizedTypeImpl.class, java.lang.reflect.Type.class,
+                        java.lang.reflect.Type[].class),
+                doLoadClass(creator, parameterizedType.name().toString(), tccl), typeArgsHandle);
     }
 
     private static ResultHandle doLoadClass(BytecodeCreator creator, String className, ResultHandle tccl) {
@@ -403,6 +421,10 @@ final class Types {
             default:
                 throw new IllegalArgumentException("Unsupported primitive: " + primitive);
         }
+    }
+
+    static boolean isPrimitiveClassName(String className) {
+        return PRIMITIVE_CLASS_NAMES.contains(className);
     }
 
 }

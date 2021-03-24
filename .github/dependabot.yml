@@ -23,6 +23,7 @@ updates:
       - dependency-name: org.eclipse:yasson
       - dependency-name: org.yaml:snakeyaml
       - dependency-name: com.google.guava:guava
+      - dependency-name: com.vackosar.gitflowincrementalbuilder:gitflow-incremental-builder
       # Quarkus
       - dependency-name: io.quarkus.gizmo:gizmo
       - dependency-name: io.quarkus.http:*
@@ -69,6 +70,7 @@ updates:
       - dependency-name: org.mockito:*
       - dependency-name: org.awaitility:awaitility
       - dependency-name: com.thoughtworks.xstream:xstream
+      - dependency-name: org.jacoco:*
       # Maven plugins
       - dependency-name: net.revelc.code.formatter:formatter-maven-plugin
       - dependency-name: net.revelc.code:impsort-maven-plugin
@@ -95,7 +97,7 @@ updates:
       # AWS
       - dependency-name: software.amazon.awssdk:*
       - dependency-name: com.amazon.alexa:*
-      - dependency-name: com.amazonaws:aws-lambda-java-events
+      - dependency-name: com.amazonaws:*
       # Apache Commons
       - dependency-name: commons-io:commons-io
       - dependency-name: org.apache.commons:commons-lang3

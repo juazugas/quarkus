@@ -1,9 +1,11 @@
 package io.quarkus.oidc.common.runtime;
 
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.security.Key;
 import java.security.KeyStore;
 import java.security.PrivateKey;
+import java.util.Base64;
 import java.util.Optional;
 
 import javax.crypto.SecretKey;
@@ -26,19 +28,24 @@ public class OidcCommonUtils {
 
     }
 
-    public static void verifyCommonConfiguration(OidcCommonConfig oidcConfig) {
+    public static void verifyCommonConfiguration(OidcCommonConfig oidcConfig, boolean isServerConfig) {
+        final String configPrefix = isServerConfig ? "quarkus.oidc." : "quarkus.oidc-client.";
         if (!oidcConfig.getAuthServerUrl().isPresent() || !oidcConfig.getClientId().isPresent()) {
-            throw new ConfigurationException("Both 'auth-server-url' and 'client-id' properties must be configured");
+            throw new ConfigurationException(
+                    String.format("Both '%sauth-server-url' and '%sclient-id' properties must be configured", configPrefix));
         }
 
         Credentials creds = oidcConfig.getCredentials();
         if (creds.secret.isPresent() && creds.clientSecret.value.isPresent()) {
             throw new ConfigurationException(
-                    "'credentials.secret' and 'credentials.client-secret' properties are mutually exclusive");
+                    String.format("'%scredentials.secret' and '%scredentials.client-secret' properties are mutually exclusive",
+                            configPrefix));
         }
         if ((creds.secret.isPresent() || creds.clientSecret.value.isPresent()) && creds.jwt.secret.isPresent()) {
             throw new ConfigurationException(
-                    "Use only 'credentials.secret' or 'credentials.client-secret' or 'credentials.jwt.secret' property");
+                    String.format(
+                            "Use only '%scredentials.secret' or '%scredentials.client-secret' or '%scredentials.jwt.secret' property",
+                            configPrefix));
         }
     }
 
@@ -81,16 +88,14 @@ public class OidcCommonUtils {
         return connectionDelayInSecs > 1 ? connectionDelayInSecs / 2 : 1;
     }
 
-    public static long getMaximumConnectionDelay(OidcCommonConfig oidcConfig) {
-        final long connectionDelayInSecs = getConnectionDelay(oidcConfig);
-        final long connectionRetryCountSecs = connectionDelayInSecs > 1 ? connectionDelayInSecs / 2 : 1;
-        return connectionDelayInSecs + connectionRetryCountSecs * oidcConfig.getConnectionTimeout().getSeconds();
-    }
-
     private static long getConnectionDelay(OidcCommonConfig oidcConfig) {
         return oidcConfig.getConnectionDelay().isPresent()
                 ? oidcConfig.getConnectionDelay().get().getSeconds()
                 : 0;
+    }
+
+    public static long getConnectionDelayInMillis(OidcCommonConfig oidcConfig) {
+        return getConnectionDelay(oidcConfig) * 1000;
     }
 
     public static Optional<ProxyOptions> toProxyOptions(OidcCommonConfig.Proxy proxyConfig) {
@@ -185,5 +190,23 @@ public class OidcCommonUtils {
                     + configKey + "' and '" + configId.get() + "'");
         }
 
+    }
+
+    public static String initClientSecretBasicAuth(OidcCommonConfig oidcConfig) {
+        if (OidcCommonUtils.isClientSecretBasicAuthRequired(oidcConfig.credentials)) {
+            return OidcConstants.BASIC_SCHEME + " "
+                    + Base64.getEncoder().encodeToString(
+                            (oidcConfig.getClientId().get() + ":"
+                                    + OidcCommonUtils.clientSecret(oidcConfig.credentials))
+                                            .getBytes(StandardCharsets.UTF_8));
+        }
+        return null;
+    }
+
+    public static Key initClientJwtKey(OidcCommonConfig oidcConfig) {
+        if (OidcCommonUtils.isClientJwtAuthRequired(oidcConfig.credentials)) {
+            return OidcCommonUtils.clientJwtKey(oidcConfig.credentials);
+        }
+        return null;
     }
 }
